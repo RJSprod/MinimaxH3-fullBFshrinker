@@ -379,8 +379,20 @@ class MainWindow(QMainWindow):
             facts.set("Detected model", "Krea 2", "ok")
             facts.set("Source precision", detection.float_dtype or "unknown")
             if geometry:
-                facts.set("Blocks", "28 transformer blocks (+12 text fusion layers)")
-                facts.set("Dimensions", "features 6144, channels 64, 48 heads / 12 KV heads, head dim 128")
+                facts.set("Transformer blocks", str(geometry.blocks))
+                facts.set(
+                    "Dimensions",
+                    f"features {geometry.features}, channels {geometry.channels}, patch "
+                    f"{geometry.patch_size}, {geometry.attention_heads} heads / "
+                    f"{geometry.kv_heads} KV heads, head dim {geometry.head_dim}",
+                )
+                facts.set(
+                    "Text fusion",
+                    f"{geometry.text_layers} feature layers, "
+                    f"{geometry.layerwise_text_blocks} layerwise blocks, "
+                    f"{geometry.refiner_text_blocks} refiner blocks, hidden "
+                    f"{geometry.text_hidden_dim}",
+                )
             facts.set("Quantization state", "already quantized" if detection.already_quantized else "none")
             facts.set("Compatibility", "Ready to convert" if analysis.ok else "; ".join(detection.errors + analysis.errors),
                       "ok" if analysis.ok else "bad")
