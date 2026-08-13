@@ -1,0 +1,22 @@
+# Project-local environment and bootstrap payloads - never committed.
+.venv/
+installer_files/
+
+# Runtime output
+logs/
+*.partial
+*.report.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

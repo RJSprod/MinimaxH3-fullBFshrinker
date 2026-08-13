@@ -1,0 +1,56 @@
+[project]
+name = "minimax-h3-converter"
+version = "1.0.0"
+description = "Standalone MiniMax H3 BF16 -> AdaLN-pruned W4A8 ConvRot / NVFP4 checkpoint converter"
+readme = "README.md"
+requires-python = "==3.12.*"
+license = { text = "Apache-2.0" }
+
+# Every dependency is pinned exactly. A release must be reproducible months later,
+# so nothing here may float. See docs/COMPATIBILITY.md for the tested matrix.
+dependencies = [
+    "torch==2.13.0",
+    "comfy-kitchen==0.2.31",
+    "safetensors==0.8.0",
+    "PySide6==6.11.1",
+    "numpy==2.5.2",
+    "psutil==7.2.2",
+    "packaging==26.3",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+]
+
+[project.scripts]
+h3convert = "h3converter.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["h3converter"]
+
+# --------------------------------------------------------------------------
+# torch must come from the CUDA 13.0 wheel index.
+#
+# comfy-kitchen's accelerated CUDA backend is disabled by ComfyUI/quant_ops.py
+# when torch.version.cuda < 13, and the RTX 5090 (Blackwell, sm_120) needs a
+# recent CUDA runtime anyway. The cu130 wheels bundle the CUDA runtime
+# components, so the user does not need a separate CUDA Toolkit install.
+# --------------------------------------------------------------------------
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "slow: end-to-end conversions over synthetic fixtures",
+]

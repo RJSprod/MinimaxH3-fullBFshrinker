@@ -1,0 +1,22 @@
+{
+  "manifest_version": 1,
+  "calibration_set": "h3-nvfp4-activation-amax",
+  "version": "0",
+  "description": "Optional static activation scales for Option B (NVFP4). No pack is shipped with the repository: ComfyUI's NVFP4 linear derives an activation scale per activation when input_scale is absent, so conversions are complete and calibration-free without one. Install a pack here only to bake static input_scale tensors in.",
+  "cases": 0,
+  "coverage": {
+    "text_context_lengths": [],
+    "video_latent_shapes": [],
+    "audio_latent_shapes": [],
+    "timestep_regions": [],
+    "modality_combinations": []
+  },
+  "data_format": {
+    "type": "json",
+    "schema": {
+      "activation_amax": "object mapping quantized layer name (e.g. 'blocks.0.attn.qkv_proj') to the maximum absolute activation value observed at that layer's input across all calibration cases"
+    },
+    "input_scale_formula": "input_scale = activation_amax / (448.0 * 6.0)"
+  },
+  "files": []
+}
