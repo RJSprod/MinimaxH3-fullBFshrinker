@@ -2,6 +2,7 @@ from pathlib import Path
 
 from h3converter.krea2_detect import detect
 from h3converter.krea2_policy import build_output_plan, is_target
+from h3converter.krea2_pipeline import metadata_for
 from h3converter.quant.fp8 import layer_config
 from h3converter.safetensor_io import Header, TensorInfo
 
@@ -88,6 +89,9 @@ def test_policy_refuses_attention_only_mostly_bf16_output():
         raise AssertionError("incomplete Krea FP8 inventory was accepted")
 
 
-def test_forge_registry_format_is_fp8_scaled():
-    assert layer_config()["format"] == "fp8_scaled"
-    assert layer_config()["format"] != "scaled_fp8"
+def test_forge_scaled_fp8_does_not_declare_quant_algos_format():
+    assert layer_config() is None
+    header = _header()
+    metadata = metadata_for(header, header.path, build_output_plan(header))
+    assert "_quantization_metadata" not in metadata
+    assert metadata["fp8_storage_contract"] == "legacy_e4m3_weight_plus_f32_weight_scale"

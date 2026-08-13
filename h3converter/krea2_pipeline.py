@@ -1,6 +1,5 @@
 """Streaming, fail-safe Krea 2 scaled-FP8 conversion orchestration."""
 from __future__ import annotations
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from h3converter import constants as C
@@ -10,16 +9,15 @@ from h3converter.krea2_policy import KREA2_FP8_POLICY_VERSION, build_output_plan
 from h3converter.krea2_validate import validate_output
 from h3converter.paths import derive_output_path, partial_path, report_path, unique_output_path
 from h3converter.quant import capability
-from h3converter.quant.fp8 import layer_config, quantize
+from h3converter.quant.fp8 import quantize
 from h3converter.reports import ConversionReport
 from h3converter.safetensor_io import PlannedWriter, SourceReader, finalize, read_header
 
 def metadata_for(header, source, plan):
-    layers = {t.layer: layer_config() for t in plan.quant_targets}
     return {
-        C.QUANT_METADATA_KEY: json.dumps({"format_version": C.QUANT_METADATA_FORMAT_VERSION, "layers": layers}, separators=(",", ":"), sort_keys=True),
         "converted_by": f"{C.APP_NAME} {C.APP_VERSION}", "source_architecture": "krea2",
         "output_format": C.FORMAT_KREA2_FP8, "quantization_policy": KREA2_FP8_POLICY_VERSION,
+        "fp8_storage_contract": "legacy_e4m3_weight_plus_f32_weight_scale",
         "converted_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 

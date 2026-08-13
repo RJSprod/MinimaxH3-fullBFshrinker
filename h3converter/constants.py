@@ -50,7 +50,7 @@ FORMAT_FILENAME_INFIX = {
     FORMAT_KREA2_FP8: "fp8_scaled",
 }
 
-KREA2_FP8_POLICY_VERSION = "krea2_fp8_policy_v2"
+KREA2_FP8_POLICY_VERSION = "krea2_fp8_policy_v3"
 
 # --------------------------------------------------------------------------
 # Quantization contract (ComfyUI comfy/quant_ops.py + comfy/ops.py)
@@ -59,6 +59,9 @@ KREA2_FP8_POLICY_VERSION = "krea2_fp8_policy_v2"
 # Value of the per-layer "format" field in the checkpoint metadata.
 QUANT_FORMAT_W4A8 = "asym_w4a8_int8"
 QUANT_FORMAT_NVFP4 = "nvfp4"
+# Forge Neo's ``fp8_scaled`` checkpoint type is a legacy storage convention,
+# not an entry in its QUANT_ALGOS registry.  It must not be emitted as a
+# per-layer ``format`` value in _quantization_metadata.
 QUANT_FORMAT_KREA2_FP8 = "fp8_scaled"
 
 # safetensors __metadata__ key holding the JSON quantization descriptor.

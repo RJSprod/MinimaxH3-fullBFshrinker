@@ -192,8 +192,7 @@ def _probe_fp8(report: CapabilityReport) -> None:
         report.add("fp8.quantize", result.weight.dtype == torch.float8_e4m3fn,
                    f"weight {result.weight.dtype}, scale {result.weight_scale.dtype}")
         contract = (result.weight.shape == weight.shape and result.weight_scale.dtype == torch.float32
-                    and result.weight_scale.ndim == 0
-                    and layer_config()["format"] == C.QUANT_FORMAT_KREA2_FP8)
+                    and result.weight_scale.ndim == 0 and layer_config() is None)
         report.add("fp8.serialization_contract", contract, "F8_E4M3 weight + scalar F32 weight_scale")
         restored = dequantize(result.weight, result.weight_scale)
         rel = _rel_l2(weight, restored)

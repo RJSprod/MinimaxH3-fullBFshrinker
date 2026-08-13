@@ -1,5 +1,5 @@
 {
-  "policy_version": "krea2_fp8_policy_v2",
+  "policy_version": "krea2_fp8_policy_v3",
   "quantized_layer_families": [
     "blocks.*.attn.wq.weight", "blocks.*.attn.wk.weight",
     "blocks.*.attn.wv.weight", "blocks.*.attn.wo.weight",
@@ -10,6 +10,7 @@
   "generated_side_tensors": [{"suffix": ".weight_scale", "dtype": "F32", "shape": []}],
   "preserved_families": ["first.*", "last.*", "*.bias", "*.scale", "txtfusion.*"],
   "weight_dtype": "F8_E4M3",
-  "metadata_key": "_quantization_metadata",
-  "runtime_quant_format": "fp8_scaled"
+  "metadata_key": null,
+  "runtime_quant_format": null,
+  "loader_contract": "Forge legacy fp8_scaled: infer from F8_E4M3 weight plus sibling F32 weight_scale; do not route through QUANT_ALGOS"
 }

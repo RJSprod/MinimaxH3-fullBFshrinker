@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import torch
 
-from h3converter import constants as C
-
 FP8_MAX = 448.0
 @dataclass
 class Quantized:
@@ -23,15 +21,12 @@ def quantize(weight: torch.Tensor, device: str = "cpu") -> Quantized:
 def dequantize(weight: torch.Tensor, weight_scale: torch.Tensor) -> torch.Tensor:
     return weight.float() * weight_scale.float()
 
-def layer_config() -> dict[str, object]:
-    """Forge Neo/Comfy quantization registry descriptor.
+def layer_config() -> None:
+    """Return no QUANT_ALGOS descriptor for legacy scaled-FP8 storage.
 
-    ``fp8_scaled`` is the runtime registry key.  The inverse spelling
-    ``scaled_fp8`` is not an alias in Forge Neo and causes a load-time
-    ``KeyError`` before any weight is decoded.
+    Forge Neo recognizes this checkpoint representation from an E4M3
+    ``weight`` and its sibling FP32 ``weight_scale``.  Adding either
+    ``scaled_fp8`` or ``fp8_scaled`` as a per-module quant format makes Forge
+    index ``QUANT_ALGOS`` with a key that does not exist and abort loading.
     """
-    return {
-        "format": C.QUANT_FORMAT_KREA2_FP8,
-        "weight_scale": "weight_scale",
-        "dtype": "float8_e4m3fn",
-    }
+    return None
