@@ -65,7 +65,13 @@ def convert(request, progress_callback=None, should_cancel=None):
         report.architecture = {"model": "krea2", "detected": detection.geometry.as_dict()}
         report.source = {"path": str(source), "size_bytes": header.file_size, "dtype_counts": header.dtype_counts()}
         report.output = {"path": str(final), "size_bytes": final.stat().st_size, "format": C.FORMAT_KREA2_FP8}
-        report.quantization = {"policy": KREA2_FP8_POLICY_VERSION, "quantized_layers": plan.quantized_layer_count, "dtype_counts": plan.dtype_counts()}
+        report.quantization = {
+            "policy": KREA2_FP8_POLICY_VERSION,
+            "quantized_layers": plan.quantized_layer_count,
+            "source_bytes_selected_for_fp8": plan.source_quantized_bytes,
+            "source_fraction_selected_for_fp8": plan.source_quantized_bytes / header.file_size,
+            "dtype_counts": plan.dtype_counts(),
+        }
         report.validation = validation.as_dict(); outcome.report_path = report.write(report_path(final)); tracker.finish(final.name)
         return outcome
     except Cancelled: outcome.cancelled = True; outcome.error = "Conversion cancelled."; return outcome

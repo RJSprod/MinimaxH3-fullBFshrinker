@@ -50,7 +50,7 @@ FORMAT_FILENAME_INFIX = {
     FORMAT_KREA2_FP8: "fp8_scaled",
 }
 
-KREA2_FP8_POLICY_VERSION = "krea2_fp8_policy_v1"
+KREA2_FP8_POLICY_VERSION = "krea2_fp8_policy_v2"
 
 # --------------------------------------------------------------------------
 # Quantization contract (ComfyUI comfy/quant_ops.py + comfy/ops.py)
