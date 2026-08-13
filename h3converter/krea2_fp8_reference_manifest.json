@@ -10,5 +10,6 @@
   "generated_side_tensors": [{"suffix": ".weight_scale", "dtype": "F32", "shape": []}],
   "preserved_families": ["first.*", "last.*", "*.bias", "*.scale", "txtfusion.*"],
   "weight_dtype": "F8_E4M3",
-  "metadata_key": "_quantization_metadata"
+  "metadata_key": "_quantization_metadata",
+  "runtime_quant_format": "fp8_scaled"
 }

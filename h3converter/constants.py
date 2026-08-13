@@ -59,6 +59,7 @@ KREA2_FP8_POLICY_VERSION = "krea2_fp8_policy_v2"
 # Value of the per-layer "format" field in the checkpoint metadata.
 QUANT_FORMAT_W4A8 = "asym_w4a8_int8"
 QUANT_FORMAT_NVFP4 = "nvfp4"
+QUANT_FORMAT_KREA2_FP8 = "fp8_scaled"
 
 # safetensors __metadata__ key holding the JSON quantization descriptor.
 QUANT_METADATA_KEY = "_quantization_metadata"

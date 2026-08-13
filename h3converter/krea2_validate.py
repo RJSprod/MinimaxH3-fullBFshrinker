@@ -28,7 +28,14 @@ def validate_output(path: Path, source: Header, plan: OutputPlan) -> Validation:
         weight, scale = out.get(target.source_key), out.get(target.scale_key)
         if weight is None or weight.dtype != "F8_E4M3": result.errors.append(f"{target.source_key} is not F8_E4M3")
         if scale is None or scale.dtype != "F32" or scale.shape != (): result.errors.append(f"{target.scale_key} is not scalar F32")
-        if target.layer not in layers: result.errors.append(f"metadata missing {target.layer}")
+        config = layers.get(target.layer)
+        if config is None:
+            result.errors.append(f"metadata missing {target.layer}")
+        elif config.get("format") != C.QUANT_FORMAT_KREA2_FP8:
+            result.errors.append(
+                f"metadata for {target.layer} declares unsupported format "
+                f"{config.get('format')!r}, expected {C.QUANT_FORMAT_KREA2_FP8!r}"
+            )
     for key in plan.passthrough_keys:
         a, b = source.tensors[key], out.get(key)
         if b is None or (a.dtype, a.shape) != (b.dtype, b.shape): result.errors.append(f"preserved tensor changed: {key}")

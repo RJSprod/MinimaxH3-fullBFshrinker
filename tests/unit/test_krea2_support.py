@@ -2,6 +2,7 @@ from pathlib import Path
 
 from h3converter.krea2_detect import detect
 from h3converter.krea2_policy import build_output_plan, is_target
+from h3converter.quant.fp8 import layer_config
 from h3converter.safetensor_io import Header, TensorInfo
 
 def _header(prefix=""):
@@ -85,3 +86,8 @@ def test_policy_refuses_attention_only_mostly_bf16_output():
         assert "Refusing to create a mostly-BF16 output" in str(exc)
     else:
         raise AssertionError("incomplete Krea FP8 inventory was accepted")
+
+
+def test_forge_registry_format_is_fp8_scaled():
+    assert layer_config()["format"] == "fp8_scaled"
+    assert layer_config()["format"] != "scaled_fp8"
