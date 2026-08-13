@@ -35,17 +35,22 @@ ADALN_PRUNE_VERSION = "h3_adaln_curve_v1"
 # --------------------------------------------------------------------------
 FORMAT_W4A8 = "w4a8_convrot"
 FORMAT_NVFP4 = "nvfp4"
+FORMAT_KREA2_FP8 = "krea2_fp8_scaled"
 
 FORMAT_LABELS = {
     FORMAT_W4A8: "AdaLN-pruned W4A8 ConvRot",
     FORMAT_NVFP4: "AdaLN-pruned NVFP4",
+    FORMAT_KREA2_FP8: "FP8 Scaled (Forge Neo / ComfyUI)",
 }
 
 # Filename infixes used when naming the output beside the source.
 FORMAT_FILENAME_INFIX = {
     FORMAT_W4A8: "pruned_w4a8_convrot",
     FORMAT_NVFP4: "pruned_nvfp4",
+    FORMAT_KREA2_FP8: "fp8_scaled",
 }
+
+KREA2_FP8_POLICY_VERSION = "krea2_fp8_policy_v1"
 
 # --------------------------------------------------------------------------
 # Quantization contract (ComfyUI comfy/quant_ops.py + comfy/ops.py)
@@ -251,10 +256,12 @@ ADALN_REL_ERROR_ABORT = 2.5e-2
 DISK_REQUIRED_MULTIPLIER = {
     FORMAT_W4A8: 2.0,
     FORMAT_NVFP4: 2.8,
+    FORMAT_KREA2_FP8: 1.2,
 }
 DISK_PREFERRED_MULTIPLIER = {
     FORMAT_W4A8: 3.2,
     FORMAT_NVFP4: 4.0,
+    FORMAT_KREA2_FP8: 1.5,
 }
 # Absolute working headroom on top of the output itself, for the log, the
 # report and filesystem overhead.
@@ -294,4 +301,5 @@ PHASE_WEIGHTS = {
         "quantize": 0.50,
         "finalize": 0.05,
     },
+    FORMAT_KREA2_FP8: {"inspect": 0.05, "quantize": 0.90, "finalize": 0.05},
 }

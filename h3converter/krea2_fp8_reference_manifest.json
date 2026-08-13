@@ -1,0 +1,13 @@
+{
+  "policy_version": "krea2_fp8_policy_v1",
+  "reference_pair": "official Krea 2 BF16 and fp8_scaled checkpoint headers",
+  "quantized_layer_families": [
+    "blocks.*.attn.wq.weight", "blocks.*.attn.wk.weight",
+    "blocks.*.attn.wv.weight", "blocks.*.attn.wo.weight",
+    "blocks.*.mlp.w1.weight", "blocks.*.mlp.w2.weight", "blocks.*.mlp.w3.weight"
+  ],
+  "generated_side_tensors": [{"suffix": ".weight_scale", "dtype": "F32", "shape": []}],
+  "preserved_families": ["first.*", "last.*", "*.bias", "*.scale", "txtfusion.*"],
+  "weight_dtype": "F8_E4M3",
+  "metadata_key": "_quantization_metadata"
+}

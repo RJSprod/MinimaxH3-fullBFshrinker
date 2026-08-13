@@ -248,7 +248,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(48, 48, 48, 48)
         layout.setSpacing(16)
 
-        layout.addWidget(heading("Select a MiniMax H3 checkpoint", 22))
+        layout.addWidget(heading("Select a checkpoint to shrink", 22))
         layout.addWidget(muted(
             "Choose the full, unpruned BF16 .safetensors file. It is read in place and never "
             "modified; the converted checkpoint is written next to it."
@@ -277,7 +277,7 @@ class MainWindow(QMainWindow):
 
     def _on_browse(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select MiniMax H3 checkpoint", "", "Safetensors checkpoints (*.safetensors)"
+            self, "Select checkpoint", "", "Safetensors checkpoints (*.safetensors)"
         )
         if not path:
             return
@@ -318,7 +318,8 @@ class MainWindow(QMainWindow):
 
         self._button_a = FormatButton(C.FORMAT_W4A8, "A  -  " + C.FORMAT_LABELS[C.FORMAT_W4A8], "")
         self._button_b = FormatButton(C.FORMAT_NVFP4, "B  -  " + C.FORMAT_LABELS[C.FORMAT_NVFP4], "")
-        for button in (self._button_a, self._button_b):
+        self._button_krea = FormatButton(C.FORMAT_KREA2_FP8, C.FORMAT_LABELS[C.FORMAT_KREA2_FP8], "")
+        for button in (self._button_a, self._button_b, self._button_krea):
             button.clicked.connect(lambda _=False, b=button: self._start_conversion(b.key))
             layout.addWidget(button)
 
@@ -351,11 +352,11 @@ class MainWindow(QMainWindow):
         facts.set("Source file", analysis.path.name)
         facts.set("Source size", human_bytes(analysis.size_bytes))
 
-        if detection is None or not detection.is_h3:
+        if detection is None or (not detection.is_h3 and not getattr(detection, "is_krea2", False)):
             reason = "; ".join((detection.errors if detection else []) + analysis.errors)
-            facts.set("Detected model", "Not a MiniMax H3 checkpoint", "bad")
+            facts.set("Detected model", "Unsupported / unknown checkpoint", "bad")
             facts.set("Compatibility", reason or "unrecognised checkpoint", "bad")
-        else:
+        elif detection.is_h3:
             geometry = detection.geometry
             facts.set("Detected model", "MiniMax H3", "ok")
             facts.set("Source precision", detection.float_dtype or "unknown")
@@ -373,6 +374,16 @@ class MainWindow(QMainWindow):
                 "Ready to convert" if analysis.ok else "; ".join(detection.errors + analysis.errors),
                 "ok" if analysis.ok else "bad",
             )
+        else:
+            geometry = detection.geometry
+            facts.set("Detected model", "Krea 2", "ok")
+            facts.set("Source precision", detection.float_dtype or "unknown")
+            if geometry:
+                facts.set("Blocks", "28 transformer blocks (+12 text fusion layers)")
+                facts.set("Dimensions", "features 6144, channels 64, 48 heads / 12 KV heads, head dim 128")
+            facts.set("Quantization state", "already quantized" if detection.already_quantized else "none")
+            facts.set("Compatibility", "Ready to convert" if analysis.ok else "; ".join(detection.errors + analysis.errors),
+                      "ok" if analysis.ok else "bad")
 
         system = self._system
         gpu = system.gpu
@@ -383,7 +394,12 @@ class MainWindow(QMainWindow):
         facts.set("System RAM", f"{human_bytes(system.total_ram_bytes)} total, "
                                 f"{human_bytes(system.available_ram_bytes)} available")
 
-        for key, button in ((C.FORMAT_W4A8, self._button_a), (C.FORMAT_NVFP4, self._button_b)):
+        is_krea = bool(getattr(detection, "is_krea2", False))
+        self._button_a.setVisible(not is_krea)
+        self._button_b.setVisible(not is_krea)
+        self._button_krea.setVisible(is_krea)
+        for key, button in ((C.FORMAT_W4A8, self._button_a), (C.FORMAT_NVFP4, self._button_b),
+                            (C.FORMAT_KREA2_FP8, self._button_krea)):
             self._configure_format_button(key, button)
 
         if self._capability is None:

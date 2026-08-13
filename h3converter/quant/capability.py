@@ -72,13 +72,15 @@ class CapabilityReport:
     def ok_for(self, output_format: str) -> bool:
         if not self.group_ok("runtime."):
             return False
-        prefix = "w4a8." if output_format == C.FORMAT_W4A8 else "nvfp4."
+        prefix = ("w4a8." if output_format == C.FORMAT_W4A8 else
+                  "fp8." if output_format == C.FORMAT_KREA2_FP8 else "nvfp4.")
         return self.group_ok(prefix)
 
     def blocking_reason(self, output_format: str) -> str | None:
         if self.ok_for(output_format):
             return None
-        prefix = "w4a8." if output_format == C.FORMAT_W4A8 else "nvfp4."
+        prefix = ("w4a8." if output_format == C.FORMAT_W4A8 else
+                  "fp8." if output_format == C.FORMAT_KREA2_FP8 else "nvfp4.")
         failed = [c for c in self.failures() if c.name.startswith(("runtime.", prefix))]
         if not failed:
             return f"no self-test results for {C.FORMAT_LABELS[output_format]}"
@@ -177,7 +179,29 @@ def probe(device: str | None = None, prefer_cuda: bool = True) -> CapabilityRepo
 
     _probe_w4a8(report)
     _probe_nvfp4(report)
+    _probe_fp8(report)
     return report
+
+def _probe_fp8(report: CapabilityReport) -> None:
+    """Exercise the exact scalar-scaled E4M3 serialization adapter."""
+    try:
+        from h3converter.quant.fp8 import dequantize, layer_config, quantize
+        report.add("fp8.layout_available", hasattr(torch, "float8_e4m3fn"), "torch.float8_e4m3fn")
+        weight = torch.randn(32, 64, generator=torch.Generator().manual_seed(19), dtype=torch.float32)
+        result = quantize(weight.to(torch.bfloat16), device=report.device)
+        report.add("fp8.quantize", result.weight.dtype == torch.float8_e4m3fn,
+                   f"weight {result.weight.dtype}, scale {result.weight_scale.dtype}")
+        contract = (result.weight.shape == weight.shape and result.weight_scale.dtype == torch.float32
+                    and result.weight_scale.ndim == 0 and layer_config()["format"] == "scaled_fp8")
+        report.add("fp8.serialization_contract", contract, "F8_E4M3 weight + scalar F32 weight_scale")
+        restored = dequantize(result.weight, result.weight_scale)
+        rel = _rel_l2(weight, restored)
+        report.add("fp8.dequantize", bool(torch.isfinite(restored).all()) and rel < 0.03,
+                   f"round-trip relative L2 {rel:.4f}")
+    except Exception as exc:  # noqa: BLE001
+        for name in ("layout_available", "quantize", "serialization_contract", "dequantize"):
+            if not any(c.name == f"fp8.{name}" for c in report.checks):
+                report.add(f"fp8.{name}", False, f"{type(exc).__name__}: {exc}")
 
 
 # ---------------------------------------------------------------------------
