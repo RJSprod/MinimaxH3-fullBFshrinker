@@ -87,6 +87,9 @@ class ConversionRequest:
     # Developer-mode: fold the curve mean into the AdaLN biases. See
     # h3converter.adaln_curve for why this is off by default.
     center_basis: bool = False
+    # Read the source through a memory map instead of direct reads. See
+    # h3converter.safetensor_io.SourceReader for why direct is the default.
+    mmap_source: bool = False
 
 
 @dataclass
@@ -252,19 +255,29 @@ def convert(
             )
         log.info("Quantizing on %s with comfy-kitchen %s", caps.device, caps.kitchen_version)
 
+        log.info("Collecting system diagnostics")
         environment = system_info()
         report.environment = {
             "system": environment.as_dict(),
             "capability_checks": caps.as_dict(),
             "device": caps.device,
         }
+        log.info(
+            "RAM %.1f GB available of %.1f GB; %s",
+            environment.available_ram_bytes / 1000**3,
+            environment.total_ram_bytes / 1000**3,
+            f"VRAM {environment.gpu.free_vram_bytes / 1000**3:.1f} GB free"
+            if environment.gpu.available else "no GPU",
+        )
 
+        log.info("Fingerprinting source")
+        source_fingerprint = fingerprint(source)
         report.source = {
             "path": str(source),
             "filename": source.name,
             "size_bytes": header.file_size,
             "tensor_count": len(header.tensors),
-            "fingerprint": fingerprint(source),
+            "fingerprint": source_fingerprint,
             "sha256": None,
             "metadata_keys": sorted(header.metadata.keys()),
         }
@@ -285,13 +298,24 @@ def convert(
             report.calibration = {"strategy": "not_applicable", "description": "W4A8 does not quantize activations"}
 
         # ---- 5. AdaLN basis ---------------------------------------------
-        reader = SourceReader(source)
+        log.info("Opening source for reading (%s)", "mmap" if request.mmap_source else "direct reads")
+        reader = SourceReader(source, mmap=request.mmap_source, header=header)
         tracker.start_phase("adaln_basis", 2, "Sampling the timestep curve")
+
+        log.info("Reading time embedder: %s", ", ".join(sorted(plan.dropped_keys)))
         embedder = TimeEmbedder.from_tensors(
             {key: reader.get(key) for key in plan.dropped_keys}
         )
+        log.info(
+            "Time embedder: freq_dim %d -> hidden %d -> %d",
+            embedder.freq_dim, embedder.proj_in_weight.shape[0], embedder.out_dim,
+        )
         tracker.advance(1, f"Fitting rank-{C.ADALN_CURVE_RANK} basis over {C.ADALN_CURVE_GRID} points")
 
+        log.info(
+            "Fitting rank-%d basis over %d sampled timesteps",
+            C.ADALN_CURVE_RANK, C.ADALN_CURVE_GRID,
+        )
         basis = build_curve_basis(
             embedder,
             grid=C.ADALN_CURVE_GRID,

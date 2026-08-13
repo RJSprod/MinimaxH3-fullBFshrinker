@@ -75,7 +75,7 @@ Every on-disk detail is taken from the target runtime's own source rather than i
 
 ## Verification status
 
-### Verified in this repository (`uv run pytest` — 166 tests)
+### Verified in this repository (`uv run pytest` — 174 tests)
 
 - The golden reference census — 1,132 tensors, 200/200/322/410 by dtype, 12,540,714,592 data bytes
   — is reproduced analytically from the architecture plus the policy, by the production code path.
@@ -124,6 +124,12 @@ the alternative for experiments; both truncation errors are always reported.
 **Reduced AdaLN projections are written as BF16.** This matches the reference artifact. ComfyUI
 constructs those modules as fp32 in curve mode and casts on load, so F32 would also be loadable, at
 double the size for that tensor family.
+
+**The source is read without a memory map by default.** Each tensor is read once with ordinary
+seeks, so a mapping has nothing to amortise, memory stays bounded by one tensor, and I/O errors
+arrive as catchable Python exceptions instead of a Windows structured exception that terminates the
+process without a traceback. `--mmap-source` restores the `safetensors.safe_open` path;
+`tests/unit/test_source_reader.py` asserts the two produce byte-identical tensors.
 
 **The output size band is advisory, not a gate.** A fine-tune with a different token-refiner depth
 legitimately shifts the total. Size is reported in `validation.conformance`, never used to fail a

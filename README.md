@@ -125,6 +125,27 @@ needed to audit or reproduce the run.
 
 ---
 
+## If a run stops unexpectedly
+
+Every run writes `logs\YYYY-MM-DD_HHMMSS_*.log`, flushed per line, and three things make sure a
+failure leaves evidence rather than a log that simply stops:
+
+* **`faulthandler`** writes the C-level and Python-level frames of every thread straight to the log
+  when the process dies at the native level — an access violation inside a GPU driver or a math
+  kernel, a stack overflow, a failed memory-mapped page fault. None of those reach a Python
+  `except` block, so without this the log ends mid-run with no indication of where.
+* **`sys.excepthook` and `threading.excepthook`** catch anything raised outside a guarded call or
+  inside a worker thread.
+* **Qt's own message handler** is routed into the log, so a Qt fatal is recorded even with no
+  console attached.
+
+The source is read with ordinary seeks and reads rather than a memory map (`--mmap-source` opts
+back in). Each tensor is visited exactly once, so a mapping has nothing to amortise, and direct
+reads keep the resident set bounded by one tensor instead of letting the OS cache pull 66 GB into
+RAM. It also keeps I/O errors as ordinary Python exceptions: on Windows a failed page fault against
+a mapped file raises `EXCEPTION_IN_PAGE_ERROR`, a structured exception that no `except` clause can
+catch and that kills the process silently.
+
 ## The storage contract
 
 Both formats are produced by [comfy-kitchen](https://pypi.org/project/comfy-kitchen/)'s layouts
@@ -201,7 +222,7 @@ precision island, the arithmetic stops matching and the tests fail.
 
 ```
 uv sync --extra dev
-uv run pytest                       # 166 tests
+uv run pytest                       # 174 tests
 uv run pytest tests/unit -q         # fast: no conversions
 ```
 

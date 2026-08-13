@@ -70,6 +70,10 @@ IF SOMETHING GOES WRONG
 Every run writes a log file into the  logs  folder, named with the date and
 time. If the converter reports a problem, that file has the details.
 
+If the program closes by itself without an error message, that log file will
+still contain the reason - the crash details are written to it directly. Send
+the whole file when reporting the problem.
+
 Try  update_windows.bat  first - it repairs the installed components.
 
 

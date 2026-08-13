@@ -113,6 +113,10 @@ def main(argv: list[str] | None = None) -> int:
         "--center-basis", action="store_true",
         help="developer mode: fold the AdaLN curve mean into the layer biases",
     )
+    parser.add_argument(
+        "--mmap-source", action="store_true",
+        help="read the source through a memory map instead of direct reads",
+    )
     args = parser.parse_args(argv)
 
     if args.check:
@@ -151,6 +155,7 @@ def main(argv: list[str] | None = None) -> int:
             measure_every=max(args.measure_every, 0),
             full_sha256=args.sha256,
             center_basis=args.center_basis,
+            mmap_source=args.mmap_source,
         ),
         progress_callback=_progress_printer(),
     )

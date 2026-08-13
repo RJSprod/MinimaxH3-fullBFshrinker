@@ -202,17 +202,38 @@ def read_header(path: str | os.PathLike[str]) -> Header:
 # ---------------------------------------------------------------------------
 
 class SourceReader:
-    """Memory-mapped read access to a source checkpoint.
+    """Reads one tensor at a time from a source checkpoint.
 
-    Wraps ``safetensors.safe_open`` so tensors are faulted in one at a time
-    rather than materialising the whole 66 GB file.
+    Two strategies, because the source is ~66 GB:
+
+    ``mmap=False`` (default) reads each tensor with an ordinary seek and read,
+    using the byte offsets already parsed from the header. Every tensor is
+    visited exactly once by the conversion, so there is nothing for a mapping
+    to amortise, and direct reads keep the resident set bounded by one tensor
+    instead of letting the OS cache pull the whole file into RAM. It also keeps
+    I/O failures as ordinary Python exceptions: on Windows a failed page fault
+    against a mapped file raises EXCEPTION_IN_PAGE_ERROR, a structured
+    exception that no ``except`` clause can catch and that terminates the
+    process with no traceback at all.
+
+    ``mmap=True`` uses ``safetensors.safe_open`` instead, which memory-maps the
+    file. Kept for comparison and for callers that want lazy paging.
     """
 
-    def __init__(self, path: str | os.PathLike[str]):
-        from safetensors import safe_open  # imported lazily: torch-free header path
-
+    def __init__(self, path: str | os.PathLike[str], mmap: bool = False,
+                 header: Header | None = None):
         self.path = Path(path)
-        self._handle = safe_open(str(self.path), framework="pt", device="cpu")
+        self.mmap = mmap
+        self._handle = None
+        self._fh = None
+        self._header = header if header is not None else read_header(self.path)
+
+        if mmap:
+            from safetensors import safe_open  # lazy: the header path is torch-free
+
+            self._handle = safe_open(str(self.path), framework="pt", device="cpu")
+        else:
+            self._fh = open(self.path, "rb", buffering=0)
 
     def __enter__(self) -> "SourceReader":
         return self
@@ -224,15 +245,52 @@ class SourceReader:
         handle, self._handle = self._handle, None
         if handle is not None and hasattr(handle, "__exit__"):
             handle.__exit__(None, None, None)
+        fh, self._fh = self._fh, None
+        if fh is not None:
+            try:
+                fh.close()
+            except OSError:
+                pass
 
     def keys(self) -> list[str]:
-        return list(self._handle.keys())
-
-    def get(self, name: str) -> torch.Tensor:
-        return self._handle.get_tensor(name)
+        return list(self._header.tensors)
 
     def metadata(self) -> dict[str, str]:
-        return dict(self._handle.metadata() or {})
+        return dict(self._header.metadata)
+
+    def get(self, name: str) -> torch.Tensor:
+        if self._handle is not None:
+            return self._handle.get_tensor(name)
+        return self._read_tensor(name)
+
+    def _read_tensor(self, name: str) -> torch.Tensor:
+        info = self._header.tensors.get(name)
+        if info is None:
+            raise SafetensorsError(f"{self.path.name}: no tensor named {name!r}")
+
+        dtype = ST_TO_TORCH.get(info.dtype)
+        if dtype is None:
+            raise SafetensorsError(f"{name}: unsupported dtype {info.dtype}")
+        if info.numel == 0:
+            return torch.empty(info.shape, dtype=dtype)
+
+        nbytes = info.nbytes
+        buffer = torch.empty(nbytes, dtype=torch.uint8)
+        view = memoryview(buffer.numpy())
+
+        self._fh.seek(self._header.data_start + info.begin)
+        filled = 0
+        while filled < nbytes:
+            # buffering=0 means read() can return a short count on large reads.
+            read = self._fh.readinto(view[filled:])
+            if not read:
+                raise SafetensorsError(
+                    f"{self.path.name}: unexpected end of file reading {name!r} "
+                    f"({filled} of {nbytes} bytes); the source may be truncated"
+                )
+            filled += read
+
+        return buffer.view(dtype).reshape(info.shape)
 
 
 # ---------------------------------------------------------------------------

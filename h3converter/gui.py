@@ -12,7 +12,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QThread, QUrl, Qt, Signal
+from PySide6.QtCore import QtMsgType, QThread, QUrl, Qt, Signal, qInstallMessageHandler
 from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QApplication,
@@ -635,7 +635,22 @@ QProgressBar::chunk { background: #3563e9; border-radius: 5px; }
 """
 
 
+_QT_LEVELS = {
+    QtMsgType.QtDebugMsg: log.debug,
+    QtMsgType.QtInfoMsg: log.info,
+    QtMsgType.QtWarningMsg: log.warning,
+    QtMsgType.QtCriticalMsg: log.error,
+    QtMsgType.QtFatalMsg: log.critical,
+}
+
+
+def _qt_message_handler(mode, context, message) -> None:
+    """Send Qt's own warnings and fatals to the run log."""
+    _QT_LEVELS.get(mode, log.info)("Qt: %s", message)
+
+
 def run_gui(argv: list[str] | None = None) -> int:
+    qInstallMessageHandler(_qt_message_handler)
     app = QApplication(argv or [])
     app.setApplicationName(C.APP_NAME)
     window = MainWindow()
