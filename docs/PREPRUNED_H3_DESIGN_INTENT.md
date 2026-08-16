@@ -557,9 +557,42 @@ The feature is complete when:
 | 1 | Is `int8_tensorwise`'s `weight_scale` per-channel or tensor-wide in the pinned build? | Profiles 2/3 quality claim | Capability probe (§4.0); resolve before writing the quantizer |
 | 2 | Does ComfyUI load a checkpoint mixing `asym_w4a8_int8` and `int8_tensorwise` across linears within one block? | Profiles 2/3 entirely | Runtime load test (§9.10) on the target machine |
 | 3 | Does comfy-kitchen expose an INT8 layout to delegate to, or must the converter own the numerics? | Implementation shape of `quant/int8.py` | Inspect the pinned `comfy-kitchen==0.2.31`. If not, this is the first place the converter implements quantization numerics itself rather than delegating — that departure from the existing design principle should be a conscious, documented decision |
-| 4 | Is the 40.2 GB figure BF16 or F32 for the non-quantized remainder? | Compression-ratio copy in the GUI only | Read the header of a real TenStrip checkpoint with `h3convert --inspect` |
+| 4 | ~~Is the 40.2 GB figure BF16 or F32 for the non-quantized remainder?~~ | — | **Resolved 2026-08-16** — see §11. BF16, 40.22 GB. |
 
 None of these block the Profile 1 pre-pruned path in §8.2 step 1.
+
+---
+
+## 11. Confirmed against a real checkpoint
+
+`10Eros_Max_h3_fl2va_beta2_pruned.safetensors` (40.22 GB) was run through the current GUI on
+the target machine. It was refused, as expected — the feature is unimplemented — but the
+inspection screen confirms most of §3 already holds against a real file:
+
+| Reported | Confirms |
+|---|---|
+| Detected model: MiniMax H3 | §3.1 criterion 1 |
+| 50 transformer blocks (+2 token refiner) | §3.1 criterion 2; reference geometry |
+| hidden 5376, 56×128 heads, ffn 14336 | `H3_REFERENCE_GEOMETRY` exactly |
+| **time embed 8** | §3.1 criterion 3 — this value is read from `adaln_t_table`'s second dimension, so the curve table is present and is rank 8 |
+| Pruning state: curve-pruned already | `already_curve_pruned` is set correctly |
+| Quantization state: none | §3.1 criteria 7–8 |
+| Source precision: BF16 | resolves open question 4 |
+
+Only one compatibility error was produced — the §3.4 refusal at `h3_detect.py:234-238`. The
+AdaLN shape checks at `_convertibility_errors` (every block against `[96768, 8]`, final against
+`[10752, 8]`) passed silently, and the time-embedder requirement was correctly skipped by its
+existing `if not result.already_curve_pruned:` guard.
+
+**This narrows §8.2 step 1 considerably.** Detection already parses and validates the curve
+form correctly; it refuses on policy, not on failing to understand the file. The work is the
+refusal gate plus the plan/pipeline/validation branches in §8.1 — not new detection logic.
+
+Target machine for reference: RTX 5090 (sm_120), 34.19 GB VRAM, 102.56 GB RAM. Available RAM
+at inspection time was 16.42 GB against a `TARGET_PEAK_RAM_BYTES` of 80 GB; that target is a
+ceiling rather than a requirement, since the pipeline streams one tensor at a time and the
+largest source tensor is `mlp.fc1` at ~308 MB in BF16. Worth measuring on the first real run
+rather than assuming.
 
 ---
 
