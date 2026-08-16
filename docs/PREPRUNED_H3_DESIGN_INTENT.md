@@ -3,7 +3,13 @@
 **Version:** 1.1
 **Date:** 2026-08-16
 **Supersedes:** v1.0 (`10Eros_Max_Prepruned_High_Level_Design_Intent.txt`)
-**Status:** design intent, not yet implemented
+**Status:** §8.2 step 1 implemented and tested. Profiles 2/3 specified, not built.
+
+| Part | State |
+|---|---|
+| `PREPRUNED_H3_FLOAT` detection, planning, conversion (Profile 1 / Option A + NVFP4) | **Done** — 201 tests pass |
+| Per-slice Q/K/V and `fc2` error reporting (§6.1) | Not built |
+| `int8_tensorwise` quantizer, Profiles 2 and 3 (§4) | Not built — one open runtime question, §10 |
 
 ---
 
@@ -191,23 +197,40 @@ something that does not exist in the target runtime, and all references to it ar
 `quantize_input: False` is a point in this design's favour: activations stay in BF16, so the
 protected paths keep full activation precision as well as 8-bit weights.
 
-**Two things must be resolved before implementation, by probe rather than by reading:**
+**Measured against the pinned build (2026-08-16), not inferred.** `comfy-kitchen==0.2.31`
+ships `TensorWiseINT8Layout` alongside `AsymW4A8Int8Layout`, so there *is* a layout to delegate
+to and the converter does not have to own INT8 numerics. Round-tripping a 64×512 bf16 tensor
+through both:
 
-1. **Scale granularity.** The registry entry declares a single `weight_scale`; the loader in
-   `comfy/ops.py` reads it as a 1-D per-output-channel tensor. Per-channel is both more likely
-   and far better for quality. Resolve it by round-tripping a real tensor through the installed
-   build in the capability probe — the same method `quant/capability.py` already uses for W4A8
-   and NVFP4 — and fail loudly on mismatch. Do not infer it from the format's name. The size
-   impact either way is negligible (N floats vs 1); the *quality* impact is large.
-2. **Mixed-format checkpoints.** `_quantization_metadata.layers` is a per-layer map with a
-   per-layer `format` field, so a checkpoint with different formats on different linears is
-   representable. That it *loads* must be confirmed on the target runtime before Profiles 2/3
-   are considered deliverable (see §9).
+| | Storage produced | Round-trip relative L2 |
+|---|---|---|
+| `AsymW4A8Int8Layout` | `weight` I8 `[N, K/2]` + `weight_s_rel` F8_E4M3 + `weight_s_channel` F32 + `weight_codebook` F32 | **0.0734** |
+| `TensorWiseINT8Layout` | `weight` I8 `[N, K]` + `weight_scale` F32 **scalar** | **0.0103** |
 
-**There is no existing INT8 code in this converter.** Profiles 2 and 3 require, as new work:
+This settles both open questions that v1.1 had flagged as blocking:
 
-- `h3converter/quant/int8.py` — quantize / dequantize / `layer_config()`, mirroring `w4a8.py`'s
-  structure and its `_check_contract` strictness;
+1. **Scale granularity is genuinely tensor-wide** — `weight_scale` comes back with shape `()`,
+   not per-channel. The registry was right and the loader summary was misleading.
+2. **INT8 is ~7× more accurate than W4A8 here anyway.** The concern that one scale for 115M
+   values might erase the 8-bit advantage does not materialise on well-conditioned weights.
+
+The residual risk is narrower than v1.1 stated, and it is specific: a *single* scale is set by
+the global outlier, so the margin above depends on the weight's dynamic range. A grafted
+`qkv_proj` with a few extreme values will not necessarily hold a 7× advantage. That makes §6.1's
+per-slice measurement the thing that decides whether Profiles 2 and 3 earn their extra
+gigabytes — but it is now a measurement to take, not a blocker to clear.
+
+**One genuine unknown remains:** `_quantization_metadata.layers` is a per-layer map with a
+per-layer `format` field, so a checkpoint mixing `asym_w4a8_int8` and `int8_tensorwise` across
+linears is representable. That it *loads* needs the target runtime to confirm (see §9.10). It
+cannot be settled from this repository.
+
+Profiles 2 and 3 therefore need, as new work — all of it mechanical, and all of it mirroring
+code that already exists:
+
+- `h3converter/quant/int8.py` — quantize / dequantize / `layer_config()`, delegating to
+  `TensorWiseINT8Layout` exactly as `w4a8.py` delegates to `AsymW4A8Int8Layout`, with the same
+  `_check_contract` strictness;
 - an `int8.*` group in `quant/capability.py::probe`, with the same
   quantize → contract-check → dequantize → round-trip-error shape as `_probe_w4a8`;
 - an `int8_storage()` function in `h3_policy.py` and per-family storage selection in
@@ -284,24 +307,21 @@ without a custom segmented layout that the runtime would not load. Promoting the
 
 **Do not unfuse Q/K/V in the final checkpoint**, under any profile.
 
-### 4.3 The quality premise must be measured, not assumed
+### 4.3 The quality premise, as measured
 
-The profiles rest on "8-bit is safer for audio than 4-bit here". That is very likely true but
-is not free:
+The profiles rest on "8-bit is safer for audio than 4-bit here". §4.0 measured that on the
+pinned build: **0.0103 vs 0.0734 relative L2**, a 7.1× reduction in weight error. The premise
+holds comfortably on well-conditioned weights, which is more than v1.1 was willing to assume.
 
-- W4A8 ConvRot is documented at ~0.073 relative L2 on real DiT weights (`capability.py`), and
-  it is a *sophisticated* 4-bit format — rotation, Lloyd-Max codebook, ALS-refined group scales
-  at group 16, plus a per-channel scale.
-- INT8 with a **per-channel** scale should land near ~0.014 relative L2 on
-  Gaussian-distributed weights — roughly a 5× improvement, and the profiles are clearly worth it.
-- INT8 with a single **tensor-wide** scale is a different story. One scale for 115M values is
-  set by the global outlier, and on an outlier-heavy grafted tensor the effective precision can
-  fall far below the nominal 8 bits — conceivably below W4A8's grouped, rotated 4 bits.
+What the measurement does *not* cover is the case the profiles actually exist for. It was taken
+on Gaussian noise; 10Eros-Max is a weight-space graft, and a single tensor-wide scale is pinned
+by the global outlier. If grafting left extreme values in `qkv_proj`, the effective precision
+falls and the 7× margin narrows — possibly a lot. The direction of the trade is settled; the
+magnitude on *this* model is not.
 
-This is exactly why §4.0 requires the granularity to be probed. If the installed build turns
-out to be genuinely tensor-wide, Profiles 2 and 3 must be re-evaluated against measured
-per-slice error (§6) before they are offered in the GUI, not shipped on the assumption that
-more bits is always better.
+That is what §6.1's per-slice measurement is for, and why it is sequenced before Profiles 2 and
+3 in §8.2: measure the K-slice and `fc2` error under Profile 1 on the real checkpoint first, and
+let the numbers say whether the extra 1.7 GB and 4.2 GB buy anything worth having.
 
 ### 4.4 NVFP4 on this path (gap closed from v1.0)
 
@@ -495,15 +515,18 @@ three profiles; only the per-family storage format differs.
 
 ### 8.2 Suggested sequencing
 
-1. **Detection + policy + pipeline for `PREPRUNED_H3_FLOAT`, Profile 1 only.** Delivers a
-   ~12.5 GB output against a target this repo already reproduces analytically. Lowest risk,
-   highest confidence, and it exercises every structural change without any new numerics.
-2. **Per-slice error measurement (§6.1).** Needed to judge whether Profiles 2/3 are worth
-   shipping, and useful on Profile 1 immediately.
-3. **`int8_tensorwise` quantizer + capability probe**, granularity resolved by probe (§4.0).
-4. **Profiles 2 and 3**, gated on the mixed-format runtime load test (§9).
+This is risk-ordering, not scope. All three profiles remain in scope; the ladder in §4.2 is the
+point of the feature, and shipping only step 1 would be a partial delivery, not a finished one.
 
-Steps 1 and 2 are worth shipping on their own if step 3 stalls on runtime compatibility.
+1. ~~**Detection + policy + pipeline for `PREPRUNED_H3_FLOAT`, Profile 1 only.**~~ **Done.**
+   Lowest risk and no new numerics: it delivers a ~12.5 GB output against a target this repo
+   already reproduces analytically, and it exercises every structural change in §8.1.
+2. **Per-slice error measurement (§6.1).** Next. It is what decides whether Profiles 2/3 earn
+   their size on this model (§4.3), and it is useful on Profile 1 immediately.
+3. **`int8_tensorwise` quantizer + capability probe.** Mechanical now that §4.0 has resolved
+   the layout and the granularity — it mirrors `quant/w4a8.py`.
+4. **Profiles 2 and 3**, gated on the mixed-format runtime load test (§9.10) — the one thing
+   here that genuinely cannot be settled without the target runtime.
 
 ---
 
@@ -552,14 +575,16 @@ The feature is complete when:
 
 ## 10. Open questions
 
-| # | Question | Blocks | How to resolve |
+| # | Question | Blocks | Status |
 |---|---|---|---|
-| 1 | Is `int8_tensorwise`'s `weight_scale` per-channel or tensor-wide in the pinned build? | Profiles 2/3 quality claim | Capability probe (§4.0); resolve before writing the quantizer |
-| 2 | Does ComfyUI load a checkpoint mixing `asym_w4a8_int8` and `int8_tensorwise` across linears within one block? | Profiles 2/3 entirely | Runtime load test (§9.10) on the target machine |
-| 3 | Does comfy-kitchen expose an INT8 layout to delegate to, or must the converter own the numerics? | Implementation shape of `quant/int8.py` | Inspect the pinned `comfy-kitchen==0.2.31`. If not, this is the first place the converter implements quantization numerics itself rather than delegating — that departure from the existing design principle should be a conscious, documented decision |
+| 1 | ~~Is `int8_tensorwise`'s `weight_scale` per-channel or tensor-wide?~~ | — | **Resolved 2026-08-16** — tensor-wide, shape `()`. Measured against the pinned build; see §4.0. |
+| 2 | Does ComfyUI load a checkpoint mixing `asym_w4a8_int8` and `int8_tensorwise` across linears within one block? | Profiles 2/3 shipping | **Open.** Needs the target runtime — cannot be settled from this repository. Runtime load test, §9.10. |
+| 3 | ~~Does comfy-kitchen expose an INT8 layout, or must the converter own the numerics?~~ | — | **Resolved 2026-08-16** — `TensorWiseINT8Layout` ships in `comfy-kitchen==0.2.31`. The converter delegates, as it does for W4A8; no departure from the design principle. |
 | 4 | ~~Is the 40.2 GB figure BF16 or F32 for the non-quantized remainder?~~ | — | **Resolved 2026-08-16** — see §11. BF16, 40.22 GB. |
+| 5 | How much of the 7× INT8 advantage survives on grafted `qkv_proj` weights? | Whether Profiles 2/3 are worth their size | **Open by design.** This is a measurement on the real checkpoint (§6.1), not a blocker. |
 
-None of these block the Profile 1 pre-pruned path in §8.2 step 1.
+Only question 2 blocks anything, and only Profiles 2 and 3. Nothing blocks the pre-pruned
+Profile 1 path.
 
 ---
 
