@@ -104,19 +104,60 @@ def test_wrong_table_rank_is_refused(tmp_path):
     assert any(C.ADALN_TABLE_KEY in e for e in detection.errors)
 
 
-def test_bf16_table_is_refused(tmp_path):
-    source = tmp_path / "bf16table.safetensors"
+def test_a_bf16_table_is_accepted(tmp_path):
+    """Real TenStrip checkpoints ship a BF16 table; F32 is the converter's own
+    output convention, not a requirement to impose on a source."""
+    source = build_prepruned_h3(
+        tmp_path / "bf16table.safetensors", geometry=SMALL_GEOMETRY, table_dtype="BF16"
+    )
+
+    header = read_header(source)
+    assert header.get(C.ADALN_TABLE_KEY).dtype == "BF16"
+
+    detection = detect(header)
+    assert detection.convertible, detection.errors
+    assert detection.source_form == C.SOURCE_FORM_PREPRUNED
+
+
+def test_an_f32_table_is_accepted(tmp_path):
+    source = build_prepruned_h3(
+        tmp_path / "f32table.safetensors", geometry=SMALL_GEOMETRY, table_dtype="F32"
+    )
+
+    detection = detect(read_header(source))
+    assert detection.convertible, detection.errors
+
+
+def test_an_integer_table_is_refused(tmp_path):
+    """Whatever that is, it is not a curve."""
+    source = tmp_path / "i8table.safetensors"
     build_prepruned_h3(source, geometry=SMALL_GEOMETRY)
 
     from safetensors.torch import load_file
 
     tensors = load_file(str(source))
-    tensors[C.ADALN_TABLE_KEY] = tensors[C.ADALN_TABLE_KEY].to(torch.bfloat16)
+    tensors[C.ADALN_TABLE_KEY] = torch.zeros(
+        (C.ADALN_CURVE_GRID, C.ADALN_CURVE_RANK), dtype=torch.int8
+    )
     save_file(tensors, str(source))
 
     detection = detect(read_header(source))
     assert not detection.convertible
-    assert any("expected F32" in e for e in detection.errors)
+    assert any("floating-point" in e for e in detection.errors)
+
+
+def test_table_dtype_is_preserved_in_the_plan(tmp_path):
+    for table_dtype in ("BF16", "F32"):
+        source = build_prepruned_h3(
+            tmp_path / f"table_{table_dtype}.safetensors",
+            geometry=SMALL_GEOMETRY, table_dtype=table_dtype,
+        )
+        header = read_header(source)
+        geometry = detect(header).geometry
+        plan = build_output_plan(header, geometry, C.FORMAT_W4A8, C.SOURCE_FORM_PREPRUNED)
+
+        planned = {t.name: t for t in plan.tensors}
+        assert planned[C.ADALN_TABLE_KEY].dtype == table_dtype
 
 
 # ---------------------------------------------------------------------------

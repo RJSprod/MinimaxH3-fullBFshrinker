@@ -119,7 +119,7 @@ Header inspection only — no tensor data is read. A checkpoint qualifies if and
 |---|---|---|
 | 1 | MiniMax H3 architecture (`video_patch_proj` + `audio_patch_proj` both present) | existing `h3_detect.detect` signature test |
 | 2 | Transformer block count within the supported range | `H3_MIN_BLOCKS` (40) – `H3_MAX_BLOCKS` (64); 50 for reference H3 |
-| 3 | `adaln_t_table` present, dtype `F32`, shape exactly `[ADALN_CURVE_GRID, ADALN_CURVE_RANK]` = `[1025, 8]` | `constants.ADALN_TABLE_KEY` |
+| 3 | `adaln_t_table` present, **any float dtype**, shape exactly `[ADALN_CURVE_GRID, ADALN_CURVE_RANK]` = `[1025, 8]` | `constants.ADALN_TABLE_KEY`, `constants.FLOAT_DTYPES` |
 | 4 | **No** `time_embedder.*` tensors | `constants.KEY_TIME_EMBEDDER` |
 | 5 | Every `blocks.<i>.adaln_proj.linear.weight` has shape `[block_adaln_width, 8]` | `H3Geometry.block_adaln_width` (96,768 at hidden 5376) |
 | 6 | `final_layer.adaln_proj.linear.weight` has shape `[final_adaln_width, 8]` | `H3Geometry.final_adaln_width` (10,752) |
@@ -127,10 +127,24 @@ Header inspection only — no tensor data is read. A checkpoint qualifies if and
 | 8 | No quantization side tensors | `h3_detect._QUANT_MARKERS` (`.comfy_quant`, `.weight_scale`, `.weight_s_rel`, `.weight_s_channel`, `.weight_codebook`, `.weight_scale_2`, `.scale_weight`) |
 | 9 | All four target matrices per block are 2D, floating point, K divisible by 256 and 16 | existing `_convertibility_errors` loop |
 
-Criterion 3 is exact, not approximate. The table's second dimension **is** the AdaLN
-projections' input width at runtime — `comfy/ldm/minimax/model.py` registers the buffer as
-`[adaln_curve_grid, time_embed_dim]` and lerps between adjacent rows. A table of a different
+Criterion 3's **shape** is exact, not approximate. The table's second dimension **is** the
+AdaLN projections' input width at runtime — `comfy/ldm/minimax/model.py` registers the buffer
+as `[adaln_curve_grid, time_embed_dim]` and lerps between adjacent rows. A table of a different
 rank is a different model, not a variant to adapt to.
+
+Its **dtype is not ours to dictate**, and v1.0 and v1.1 both got this wrong. Both specified
+`F32` — taken from `REFERENCE_INVENTORY`, which describes the converter's own *output*. The
+real `10Eros_Max_h3_fl2va_beta2_pruned.safetensors` ships a **BF16** table, and a gate built
+from the output's convention refused a genuine source (see §11). The runtime casts the buffer
+on load either way. Any float dtype is accepted and copied through unchanged; an integer dtype
+is refused, because whatever that is, it is not a curve.
+
+The same reasoning applies to every curve-form tensor and to the precision islands: the
+converter's job is to detect a *downcast it would itself cause*, not to impose the reference
+checkpoint's dtypes on a source that legitimately differs. Validation therefore compares the
+output against the **plan**, and the plan against the **source** — never against a constant.
+A source storing its patch projections or output heads in BF16 converts and is reported in
+`validation.warnings`, rather than being failed.
 
 **Filenames are never trusted.** `pruned`, `bf16`, `beta1`, `beta2` carry no weight in the
 decision. This matches the existing detector's stated contract.
@@ -603,6 +617,32 @@ inspection screen confirms most of §3 already holds against a real file:
 | Pruning state: curve-pruned already | `already_curve_pruned` is set correctly |
 | Quantization state: none | §3.1 criteria 7–8 |
 | Source precision: BF16 | resolves open question 4 |
+
+### 11.1 The dtype gate was wrong (second run, same day)
+
+A second run against the same checkpoint, after the §8.2 step 1 implementation, refused it
+with:
+
+```
+adaln_t_table is BF16 (1025, 8), expected F32 (1025, 8)
+```
+
+The shape was right; the dtype gate was the converter's own invention. v1.0 asserted `F32`,
+v1.1 repeated it, and the implementation enforced it — all three tracing back to
+`REFERENCE_INVENTORY`, which describes the golden **W4A8 output**, not any source. Real
+TenStrip checkpoints store the table as BF16.
+
+Two things were wrong beyond the gate itself:
+
+- The GUI printed a hard-coded `AdaLN table: F32 [1025, 8]` directly above an error saying the
+  table was BF16. It was displaying a constant, not the file. It now reads the header.
+- `policy.fp32_islands_preserved` demanded F32 patch projections and output heads in the
+  output. On a BF16-throughout source that would have been the *next* refusal, for the same
+  reason. It now compares against the plan and warns instead of failing.
+
+The lesson, now encoded in §3.1: validate the output against the plan and the plan against the
+source. A constant derived from one known-good artifact is not a contract every source must
+satisfy.
 
 Only one compatibility error was produced — the §3.4 refusal at `h3_detect.py:234-238`. The
 AdaLN shape checks at `_convertibility_errors` (every block against `[96768, 8]`, final against

@@ -272,15 +272,26 @@ def _convertibility_errors(header: Header, g: H3Geometry, result: Detection) -> 
     # runtime interpolates against, and the projections downstream agree with
     # it. A table of another rank is a different model, not a variant to adapt
     # to, so this is checked exactly rather than approximately.
+    # The *shape* is exact -- rank is the AdaLN projections' input width and
+    # grid is what the runtime interpolates against. The *dtype* is not ours to
+    # dictate: real TenStrip checkpoints ship a BF16 table, and the runtime
+    # casts the buffer on load either way. Requiring F32 here would refuse
+    # genuine sources on the strength of what the converter's own output
+    # happens to contain.
     if result.source_form == C.SOURCE_FORM_PREPRUNED:
         table = header.get(C.ADALN_TABLE_KEY)
         expected_table = (C.ADALN_CURVE_GRID, C.ADALN_CURVE_RANK)
         if table is None:  # pragma: no cover - classification guarantees presence
             errors.append(f"missing {C.ADALN_TABLE_KEY}")
-        elif table.dtype != "F32" or table.shape != expected_table:
+        elif table.shape != expected_table:
             errors.append(
                 f"{C.ADALN_TABLE_KEY} is {table.dtype} {table.shape}, expected "
-                f"F32 {expected_table}"
+                f"shape {expected_table}"
+            )
+        elif table.dtype not in C.FLOAT_DTYPES:
+            errors.append(
+                f"{C.ADALN_TABLE_KEY} is {table.dtype}, which is not a floating-point "
+                f"dtype - the curve table must be one of {', '.join(C.FLOAT_DTYPES)}"
             )
 
     if result.already_quantized:

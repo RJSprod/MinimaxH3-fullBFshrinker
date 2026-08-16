@@ -156,6 +156,7 @@ def prepruned_source_inventory(
     geometry: H3Geometry,
     float_dtype: str = "BF16",
     adaln_dtype: str | None = None,
+    table_dtype: str = "BF16",
 ) -> list[TensorSpec]:
     """Every tensor an already AdaLN-curve-pruned H3 checkpoint contains.
 
@@ -163,16 +164,17 @@ def prepruned_source_inventory(
     inventory minus the time embedder, with the AdaLN projections at rank
     ``ADALN_CURVE_RANK`` and the shared table in front of them.
 
-    ``adaln_dtype`` defaults to ``float_dtype``. It is separable because the
-    converter must copy those projections through at whatever dtype the source
-    used -- F32 is as legitimate here as BF16, and the output validator has to
-    accept both.
+    ``adaln_dtype`` and ``table_dtype`` are separable from ``float_dtype``
+    because the converter must copy the curve form through at whatever dtype
+    the source used. Both default to BF16, which is what real TenStrip
+    checkpoints ship; F32 is equally legitimate and the output validator has to
+    accept either.
     """
     adaln_dtype = adaln_dtype or float_dtype
     reduced = curve_geometry(geometry)
 
     specs: list[TensorSpec] = [
-        TensorSpec(C.ADALN_TABLE_KEY, "F32", (C.ADALN_CURVE_GRID, C.ADALN_CURVE_RANK))
+        TensorSpec(C.ADALN_TABLE_KEY, table_dtype, (C.ADALN_CURVE_GRID, C.ADALN_CURVE_RANK))
     ]
     for spec in full_source_inventory(reduced, float_dtype=float_dtype):
         if spec.name.startswith(f"{C.KEY_TIME_EMBEDDER}."):
