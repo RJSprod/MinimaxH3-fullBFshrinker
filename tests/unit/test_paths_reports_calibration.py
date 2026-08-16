@@ -317,3 +317,25 @@ def test_non_positive_activation_maximum_is_rejected(tmp_path):
 
     with pytest.raises(calib.CalibrationError, match="not a usable maximum"):
         calib.load_pack(tmp_path)
+
+
+def test_an_already_pruned_source_name_does_not_double_up():
+    """TenStrip checkpoints are named '..._pruned'; the infix replaces it."""
+    from pathlib import Path
+
+    from h3converter import constants as C
+    from h3converter.paths import derive_output_path
+
+    out = derive_output_path(Path("10Eros_Max_h3_fl2va_beta2_pruned.safetensors"), C.FORMAT_W4A8)
+    assert out.name == "10Eros_Max_h3_fl2va_beta2_pruned_w4a8_convrot.safetensors"
+    assert "pruned_pruned" not in out.name
+
+
+def test_unpruned_still_wins_over_pruned_in_the_marker_regex():
+    from pathlib import Path
+
+    from h3converter import constants as C
+    from h3converter.paths import derive_output_path
+
+    out = derive_output_path(Path("H3_unpruned_v2.safetensors"), C.FORMAT_W4A8)
+    assert out.name == "H3_pruned_w4a8_convrot_v2.safetensors"

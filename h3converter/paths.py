@@ -30,7 +30,12 @@ def calibration_assets_dir() -> Path:
 # Recognised precision/pruning markers in a source filename. These are stripped
 # before the output infix is inserted so we do not produce names like
 # "..._bf16_pruned_w4a8_convrot...".
-_SOURCE_MARKERS = re.compile(r"(?i)(?:^|[_-])(bf16|fp16|f16|fp32|f32|full|unpruned)(?=[_-]|$)")
+# "unpruned" precedes "pruned" so the longer alternative wins; a source already
+# named "..._pruned" would otherwise produce "..._pruned_pruned_w4a8_convrot",
+# which is exactly what an already-pruned TenStrip checkpoint is called.
+_SOURCE_MARKERS = re.compile(
+    r"(?i)(?:^|[_-])(bf16|fp16|f16|fp32|f32|full|unpruned|pruned)(?=[_-]|$)"
+)
 
 
 def derive_output_path(source: Path, output_format: str) -> Path:

@@ -87,6 +87,7 @@ def build_prepruned_h3(
     seed: int = 20260816,
     float_dtype: str = "BF16",
     adaln_dtype: str | None = None,
+    table_dtype: str = "BF16",
     metadata: dict[str, str] | None = None,
 ) -> Path:
     """Write a synthetic H3 that is *already* in the AdaLN curve form.
@@ -95,14 +96,16 @@ def build_prepruned_h3(
     embedder, an ``adaln_t_table`` at the full 1025x8, and every AdaLN
     projection already reduced to rank 8.
 
-    ``adaln_dtype`` is separable from ``float_dtype`` so the suite can cover an
-    F32-curve source, which the converter must copy through and then accept in
-    its own output validation.
+    ``adaln_dtype`` and ``table_dtype`` are separable from ``float_dtype`` so
+    the suite can cover both the BF16 curve real checkpoints ship and an F32
+    one, either of which the converter must copy through and then accept in its
+    own output validation.
     """
     generator = torch.Generator().manual_seed(seed)
     tensors: dict[str, torch.Tensor] = {}
     for spec in prepruned_source_inventory(
-        geometry, float_dtype=float_dtype, adaln_dtype=adaln_dtype
+        geometry, float_dtype=float_dtype, adaln_dtype=adaln_dtype,
+        table_dtype=table_dtype,
     ):
         tensors[spec.name] = _fill(spec.name, ST_TO_TORCH[spec.dtype], spec.shape, generator)
 

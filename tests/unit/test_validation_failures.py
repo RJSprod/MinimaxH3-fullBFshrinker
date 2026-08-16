@@ -165,14 +165,14 @@ def test_wrong_adaln_table_shape_fails(converted, plan_and_geometry, tmp_path):
 
 
 def test_downcast_fp32_island_fails(converted, plan_and_geometry, tmp_path):
-    """The patch projections and output heads must stay fp32."""
+    """A silent downcast of the patch projections or output heads must be caught."""
     tensors, metadata = _load(converted.output_path)
     tensors["final_layer.video_out.weight"] = tensors["final_layer.video_out.weight"].to(torch.bfloat16)
 
     report = _validate(_rewrite(tmp_path, tensors, metadata), plan_and_geometry)
     assert not report.ok
     failed = {f.check for f in report.failures()}
-    assert "policy.fp32_islands_preserved" in failed
+    assert "policy.precision_islands_preserved" in failed
 
 
 def test_corrupt_scale_data_fails_dequantization(converted, plan_and_geometry, tmp_path):

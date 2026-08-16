@@ -194,21 +194,25 @@ def _check_structure(report: ValidationReport, header: Header, plan: OutputPlan,
         f"{len(leftover)} time_embedder tensors remain" if leftover else "removed",
     )
 
+    # Curve-form dtypes come from the plan, not from a constant. The full path
+    # writes BF16 projections and an F32 table by policy; a pre-pruned source
+    # keeps whatever it already used -- real TenStrip checkpoints ship a BF16
+    # table and F32 is equally legitimate. Hard-coding either would fail a
+    # checkpoint the converter had copied through correctly.
+    planned_dtype = {t.name: t.dtype for t in plan.tensors}
+    float_dtypes = C.FLOAT_DTYPES
+
+    # Shape is fixed by the runtime contract; dtype follows the plan.
     table = header.get(C.ADALN_TABLE_KEY)
     expected_table = (C.ADALN_CURVE_GRID, C.ADALN_CURVE_RANK)
+    expected_table_dtype = planned_dtype.get(C.ADALN_TABLE_KEY)
     report.add(
         "pruning.adaln_table",
-        table is not None and table.dtype == "F32" and table.shape == expected_table,
+        table is not None and table.dtype == expected_table_dtype
+        and table.dtype in float_dtypes and table.shape == expected_table,
         (f"{table.dtype} {table.shape}" if table else "missing")
-        + f" (expected F32 {expected_table})",
+        + f" (expected {expected_table_dtype} {expected_table})",
     )
-
-    # The reduced projections' dtype comes from the plan, not from a constant.
-    # The full path writes BF16 by policy; a pre-pruned source keeps whatever
-    # dtype it already used, and F32 there is as legitimate as BF16. Hard-coding
-    # BF16 would fail a checkpoint the converter had copied through correctly.
-    planned_dtype = {t.name: t.dtype for t in plan.tensors}
-    float_dtypes = ("BF16", "F16", "F32", "F64")
 
     expected_block = (geometry.block_adaln_width, C.ADALN_CURVE_RANK)
     bad_blocks = []
@@ -242,18 +246,35 @@ def _check_structure(report: ValidationReport, header: Header, plan: OutputPlan,
         + f" (expected {expected_final_dtype} {expected_final})",
     )
 
-    # Precision islands.
+    # Precision islands. The failure that matters is a *downcast* -- the
+    # converter silently reducing a tensor's precision. Comparing against the
+    # plan catches exactly that, while allowing a source that already stored
+    # its islands at a lower precision to convert; ComfyUI constructs those
+    # modules as fp32 and casts on load, so a BF16 island is loadable, and
+    # upcasting it here would invent precision the source never had.
     island_problems = []
+    not_fp32 = []
     for prefix in C.FP32_PRESERVED_PREFIXES:
         for key in (prefix, f"{prefix}.weight", f"{prefix}.bias"):
             info = header.get(key)
-            if info is not None and info.dtype != "F32":
-                island_problems.append(f"{key} is {info.dtype}")
+            if info is None:
+                continue
+            expected = planned_dtype.get(key)
+            if info.dtype != expected:
+                island_problems.append(f"{key} is {info.dtype}, planned {expected}")
+            elif info.dtype != "F32":
+                not_fp32.append(f"{key} is {info.dtype}")
     report.add(
-        "policy.fp32_islands_preserved",
+        "policy.precision_islands_preserved",
         not island_problems,
-        "; ".join(island_problems) if island_problems else "patch projections and output heads are F32",
+        "; ".join(island_problems) if island_problems
+        else "patch projections and output heads kept their source precision",
     )
+    if not_fp32:
+        report.warnings.append(
+            f"{len(not_fp32)} precision-island tensors are not F32 in the source and were "
+            f"preserved as-is (first: {not_fp32[0]}); the reference H3 stores these as F32"
+        )
 
 
 def _check_metadata(report: ValidationReport, header: Header, plan: OutputPlan,

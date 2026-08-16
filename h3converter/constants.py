@@ -115,6 +115,11 @@ ADALN_CURVE_GRID = 1025
 ADALN_CURVE_RANK = 8
 ADALN_TABLE_KEY = "adaln_t_table"
 
+# Float dtypes a source may legitimately store curve-form tensors in. The full
+# path writes the table as F32 because it computes it; a pre-pruned source
+# brings its own, and real TenStrip checkpoints use BF16.
+FLOAT_DTYPES = ("BF16", "F16", "F32", "F64")
+
 # AdaLN projection fan-out, from AdalnProj(t_dim, hidden, expand, modalities):
 #   DiT block  : expand=6 (shift/scale/gate x2), modalities=3 -> 18 * hidden
 #   Final layer: expand=2 (shift/scale),         modalities=1 ->  2 * hidden
