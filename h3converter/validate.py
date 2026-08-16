@@ -203,26 +203,43 @@ def _check_structure(report: ValidationReport, header: Header, plan: OutputPlan,
         + f" (expected F32 {expected_table})",
     )
 
+    # The reduced projections' dtype comes from the plan, not from a constant.
+    # The full path writes BF16 by policy; a pre-pruned source keeps whatever
+    # dtype it already used, and F32 there is as legitimate as BF16. Hard-coding
+    # BF16 would fail a checkpoint the converter had copied through correctly.
+    planned_dtype = {t.name: t.dtype for t in plan.tensors}
+    float_dtypes = ("BF16", "F16", "F32", "F64")
+
     expected_block = (geometry.block_adaln_width, C.ADALN_CURVE_RANK)
     bad_blocks = []
+    block_dtypes: set[str] = set()
     for index in range(geometry.num_layers):
-        info = header.get(f"blocks.{index}.adaln_proj.linear.weight")
-        if info is None or info.shape != expected_block or info.dtype != "BF16":
+        name = f"blocks.{index}.adaln_proj.linear.weight"
+        info = header.get(name)
+        expected = planned_dtype.get(name)
+        if (info is None or info.shape != expected_block
+                or info.dtype != expected or info.dtype not in float_dtypes):
             bad_blocks.append(index)
+        else:
+            block_dtypes.add(info.dtype)
     report.add(
         "pruning.block_adaln_reduced",
         not bad_blocks,
-        f"{len(bad_blocks)} projections are not BF16 {expected_block}" if bad_blocks
-        else f"{geometry.num_layers} x BF16 {expected_block}",
+        f"{len(bad_blocks)} projections are not {expected_block} at the planned dtype"
+        if bad_blocks
+        else f"{geometry.num_layers} x {'/'.join(sorted(block_dtypes))} {expected_block}",
     )
 
-    final = header.get(f"{C.KEY_FINAL_ADALN}.weight")
+    final_name = f"{C.KEY_FINAL_ADALN}.weight"
+    final = header.get(final_name)
+    expected_final_dtype = planned_dtype.get(final_name)
     expected_final = (geometry.final_adaln_width, C.ADALN_CURVE_RANK)
     report.add(
         "pruning.final_adaln_reduced",
-        final is not None and final.dtype == "BF16" and final.shape == expected_final,
+        final is not None and final.dtype == expected_final_dtype
+        and final.dtype in float_dtypes and final.shape == expected_final,
         (f"{final.dtype} {final.shape}" if final else "missing")
-        + f" (expected BF16 {expected_final})",
+        + f" (expected {expected_final_dtype} {expected_final})",
     )
 
     # Precision islands.

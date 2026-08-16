@@ -91,11 +91,24 @@ class Detection:
     convertible: bool = False
     geometry: H3Geometry | None = None
     already_curve_pruned: bool = False
+    has_time_embedder: bool = False
+    source_form: str | None = None
     already_quantized: bool = False
     float_dtype: str | None = None
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     header: Header | None = None
+
+    @property
+    def source_form_label(self) -> str:
+        if self.source_form is None:
+            return "Unrecognised H3 timestep path"
+        return C.SOURCE_FORM_LABELS[self.source_form]
+
+    @property
+    def needs_pruning(self) -> bool:
+        """Whether the AdaLN curve form still has to be built for this source."""
+        return self.source_form == C.SOURCE_FORM_FULL
 
     @property
     def summary(self) -> str:
@@ -105,7 +118,8 @@ class Detection:
             g = self.geometry
             return (
                 f"MiniMax H3, {g.num_layers} blocks, hidden {g.hidden_size}, "
-                f"time embed {g.time_embed_dim}, {self.float_dtype}"
+                f"time embed {g.time_embed_dim}, {self.float_dtype} "
+                f"({self.source_form_label})"
             )
         return "MiniMax H3, but not convertible: " + "; ".join(self.errors)
 
@@ -135,10 +149,32 @@ def detect(header: Header) -> Detection:
 
     # --- Prior conversion state --------------------------------------------
     result.already_curve_pruned = C.ADALN_TABLE_KEY in keys
+    result.has_time_embedder = any(k.startswith(f"{C.KEY_TIME_EMBEDDER}.") for k in keys)
     result.already_quantized = (
         C.QUANT_METADATA_KEY in header.metadata
         or any(k.endswith(_QUANT_MARKERS) for k in keys)
     )
+
+    # --- Which timestep path does this checkpoint use? ----------------------
+    # Exactly one of the two must be present. Both is undecidable and neither
+    # is not a loadable H3; the two failures get distinct messages because they
+    # are entirely different problems for whoever is holding the file.
+    if result.already_curve_pruned and result.has_time_embedder:
+        result.errors.append(
+            f"ambiguous source: it carries both {C.ADALN_TABLE_KEY} and a full "
+            f"{C.KEY_TIME_EMBEDDER} - the converter cannot tell which timestep path "
+            "the model is meant to use"
+        )
+    elif result.already_curve_pruned:
+        result.source_form = C.SOURCE_FORM_PREPRUNED
+    elif result.has_time_embedder:
+        result.source_form = C.SOURCE_FORM_FULL
+    else:
+        result.errors.append(
+            f"no timestep path: neither {C.ADALN_TABLE_KEY} nor {C.KEY_TIME_EMBEDDER} "
+            "tensors are present, so this checkpoint cannot modulate on t"
+        )
+        return result
 
     # --- Geometry -----------------------------------------------------------
     try:
@@ -231,11 +267,22 @@ def _convertibility_errors(header: Header, g: H3Geometry, result: Detection) -> 
     errors: list[str] = []
     keys = header.tensors
 
-    if result.already_curve_pruned:
-        errors.append(
-            "source already uses the compact AdaLN curve form (adaln_t_table present) - "
-            "this tool converts full, unpruned checkpoints"
-        )
+    # The compact curve form is a supported *input*, not a refusal. What must
+    # be true is that it is intact: the table is the exact grid and rank the
+    # runtime interpolates against, and the projections downstream agree with
+    # it. A table of another rank is a different model, not a variant to adapt
+    # to, so this is checked exactly rather than approximately.
+    if result.source_form == C.SOURCE_FORM_PREPRUNED:
+        table = header.get(C.ADALN_TABLE_KEY)
+        expected_table = (C.ADALN_CURVE_GRID, C.ADALN_CURVE_RANK)
+        if table is None:  # pragma: no cover - classification guarantees presence
+            errors.append(f"missing {C.ADALN_TABLE_KEY}")
+        elif table.dtype != "F32" or table.shape != expected_table:
+            errors.append(
+                f"{C.ADALN_TABLE_KEY} is {table.dtype} {table.shape}, expected "
+                f"F32 {expected_table}"
+            )
+
     if result.already_quantized:
         errors.append(
             "source is already quantized (quantization metadata or scale tensors present) - "
@@ -250,7 +297,7 @@ def _convertibility_errors(header: Header, g: H3Geometry, result: Detection) -> 
 
     # The full source must carry a complete time embedder; the curve form is
     # synthesised from it and there is no way to recover it otherwise.
-    if not result.already_curve_pruned:
+    if result.source_form == C.SOURCE_FORM_FULL:
         for suffix in ("proj_in.weight", "proj_in.bias", "proj_out.weight", "proj_out.bias"):
             key = f"{C.KEY_TIME_EMBEDDER}.{suffix}"
             if key not in keys:
@@ -303,8 +350,15 @@ def _convertibility_warnings(header: Header, g: H3Geometry, result: Detection) -
     warnings: list[str] = []
     reference = C.H3_REFERENCE_GEOMETRY
 
-    for field_name in ("hidden_size", "num_layers", "attention_head_dim",
-                       "num_attention_heads", "ffn_hidden_size", "time_embed_dim"):
+    fields = ["hidden_size", "num_layers", "attention_head_dim",
+              "num_attention_heads", "ffn_hidden_size"]
+    # In the curve form the checkpoint's time_embed_dim *is* the table rank, so
+    # comparing it to the full model's 2688 would report a designed-in property
+    # as an anomaly on every pre-pruned source.
+    if result.source_form != C.SOURCE_FORM_PREPRUNED:
+        fields.append("time_embed_dim")
+
+    for field_name in fields:
         actual = getattr(g, field_name)
         expected = reference.get(field_name)
         if expected is not None and actual != expected:

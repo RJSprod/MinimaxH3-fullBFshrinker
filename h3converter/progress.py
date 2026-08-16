@@ -57,8 +57,13 @@ class ProgressTracker:
     _last_overall: float = 0.0
 
     @classmethod
-    def for_format(cls, output_format: str, callback: ProgressCallback | None = None) -> "ProgressTracker":
-        return cls(weights=dict(C.PHASE_WEIGHTS[output_format]), callback=callback)
+    def for_format(
+        cls,
+        output_format: str,
+        callback: ProgressCallback | None = None,
+        source_form: str = C.SOURCE_FORM_FULL,
+    ) -> "ProgressTracker":
+        return cls(weights=C.phase_weights(output_format, source_form), callback=callback)
 
     @property
     def elapsed(self) -> float:

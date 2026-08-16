@@ -13,7 +13,11 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from fixtures.synthetic import SMALL_GEOMETRY, build_synthetic_h3  # noqa: E402
+from fixtures.synthetic import (  # noqa: E402
+    SMALL_GEOMETRY,
+    build_prepruned_h3,
+    build_synthetic_h3,
+)
 
 from h3converter import constants as C  # noqa: E402
 from h3converter.pipeline import ConversionRequest, convert  # noqa: E402
@@ -52,3 +56,15 @@ def converted_w4a8(synthetic_source, tmp_path_factory):
 @pytest.fixture(scope="session")
 def converted_nvfp4(synthetic_source, tmp_path_factory):
     return _convert(synthetic_source, C.FORMAT_NVFP4, tmp_path_factory)
+
+
+@pytest.fixture(scope="session")
+def prepruned_source(tmp_path_factory) -> Path:
+    """A source already in the AdaLN curve form, as TenStrip ships them."""
+    root = tmp_path_factory.mktemp("prepruned")
+    return build_prepruned_h3(root / "Synthetic_10Eros_h3_beta2_pruned.safetensors")
+
+
+@pytest.fixture(scope="session")
+def converted_from_prepruned(prepruned_source, tmp_path_factory):
+    return _convert(prepruned_source, C.FORMAT_W4A8, tmp_path_factory)

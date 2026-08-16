@@ -17,7 +17,12 @@ from h3converter.h3_policy import (
     quantized_layer_names,
     w4a8_storage,
 )
-from h3converter.h3_reference import TensorSpec, full_source_inventory, reference_geometry
+from h3converter.h3_reference import (
+    TensorSpec,
+    full_source_inventory,
+    prepruned_source_inventory,
+    reference_geometry,
+)
 from h3converter.safetensor_io import read_header
 from h3converter.validate import header_from_specs
 
@@ -65,7 +70,19 @@ def test_filename_is_never_trusted(tmp_path):
     assert "not a MiniMax H3" in result.errors[0]
 
 
-def test_rejects_a_source_that_is_already_curve_pruned():
+def test_accepts_a_well_formed_curve_pruned_source():
+    """The compact curve form is a supported input, not a refusal."""
+    header = header_from_specs(prepruned_source_inventory(reference_geometry()))
+
+    result = detect(header)
+    assert result.is_h3
+    assert result.already_curve_pruned
+    assert result.source_form == C.SOURCE_FORM_PREPRUNED
+    assert result.convertible, result.errors
+
+
+def test_rejects_a_curve_pruned_source_whose_projections_disagree_with_the_table():
+    """Table rank and AdaLN input width are the same number; they must agree."""
     specs = [s for s in full_source_inventory(reference_geometry())
              if not s.name.startswith("time_embedder.")]
     specs.append(TensorSpec(C.ADALN_TABLE_KEY, "F32", (C.ADALN_CURVE_GRID, C.ADALN_CURVE_RANK)))
@@ -73,9 +90,11 @@ def test_rejects_a_source_that_is_already_curve_pruned():
 
     result = detect(header)
     assert result.is_h3
-    assert result.already_curve_pruned
+    assert result.source_form == C.SOURCE_FORM_PREPRUNED
     assert not result.convertible
-    assert any("already uses the compact AdaLN curve form" in e for e in result.errors)
+    # The projections are still at the full time-embed width, so they cannot
+    # consume a rank-8 table row.
+    assert any("adaln_proj.linear.weight has shape" in e for e in result.errors)
 
 
 def test_rejects_a_source_that_is_already_quantized():
