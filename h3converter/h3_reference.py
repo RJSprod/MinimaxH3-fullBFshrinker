@@ -15,7 +15,7 @@ This serves two purposes:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from h3converter import constants as C
 from h3converter.h3_detect import H3Geometry
@@ -132,4 +132,52 @@ def full_source_inventory(geometry: H3Geometry, float_dtype: str = "BF16") -> li
     specs.append(TensorSpec("final_layer.audio_out.weight", "F32", (geometry.audio_latents_dim, hidden)))
     specs.append(TensorSpec("final_layer.audio_out.bias", "F32", (geometry.audio_latents_dim,)))
 
+    return specs
+
+
+def curve_geometry(geometry: H3Geometry) -> H3Geometry:
+    """The same H3, described as it appears once already curve-pruned.
+
+    In the curve form the AdaLN projections consume the interpolated table row
+    directly, so the checkpoint's effective ``time_embed_dim`` *is* the table
+    rank, and the full embedder's two inner widths no longer exist.
+    """
+    reduced = replace(
+        geometry,
+        time_embed_dim=C.ADALN_CURVE_RANK,
+        timestep_input_dim=None,
+        time_embed_hidden_size=None,
+    )
+    reduced.adaln_curve_grid = C.ADALN_CURVE_GRID
+    return reduced
+
+
+def prepruned_source_inventory(
+    geometry: H3Geometry,
+    float_dtype: str = "BF16",
+    adaln_dtype: str | None = None,
+) -> list[TensorSpec]:
+    """Every tensor an already AdaLN-curve-pruned H3 checkpoint contains.
+
+    This is what a TenStrip/10Eros-Max ~40 GB checkpoint looks like: the full
+    inventory minus the time embedder, with the AdaLN projections at rank
+    ``ADALN_CURVE_RANK`` and the shared table in front of them.
+
+    ``adaln_dtype`` defaults to ``float_dtype``. It is separable because the
+    converter must copy those projections through at whatever dtype the source
+    used -- F32 is as legitimate here as BF16, and the output validator has to
+    accept both.
+    """
+    adaln_dtype = adaln_dtype or float_dtype
+    reduced = curve_geometry(geometry)
+
+    specs: list[TensorSpec] = [
+        TensorSpec(C.ADALN_TABLE_KEY, "F32", (C.ADALN_CURVE_GRID, C.ADALN_CURVE_RANK))
+    ]
+    for spec in full_source_inventory(reduced, float_dtype=float_dtype):
+        if spec.name.startswith(f"{C.KEY_TIME_EMBEDDER}."):
+            continue
+        if ".adaln_proj.linear." in spec.name:
+            spec = TensorSpec(spec.name, adaln_dtype, spec.shape)
+        specs.append(spec)
     return specs

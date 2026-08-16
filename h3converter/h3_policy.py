@@ -98,6 +98,7 @@ class OutputPlan:
 
     output_format: str
     geometry: H3Geometry
+    source_form: str = C.SOURCE_FORM_FULL
     tensors: list[PlannedTensor] = field(default_factory=list)
     quant_targets: list[QuantTarget] = field(default_factory=list)
     adaln_targets: list[AdalnTarget] = field(default_factory=list)
@@ -167,19 +168,35 @@ class PolicyError(RuntimeError):
     """The source cannot be mapped onto the H3 policy."""
 
 
-def build_output_plan(header: Header, geometry: H3Geometry, output_format: str) -> OutputPlan:
+def build_output_plan(
+    header: Header,
+    geometry: H3Geometry,
+    output_format: str,
+    source_form: str = C.SOURCE_FORM_FULL,
+) -> OutputPlan:
     """Derive the full output inventory from the source header.
 
     Raises ``PolicyError`` rather than silently skipping anything: a layer the
     policy names but the source lacks is a mismatch that must stop the run.
+
+    The two source forms differ only in the timestep path. A full source has
+    its time embedder dropped and its AdaLN projections collapsed onto the
+    curve basis; a pre-pruned source already carries both the table and the
+    reduced projections, and they are passed straight through -- the curve is
+    never rebuilt, re-fitted or re-collapsed.
     """
     if output_format not in (C.FORMAT_W4A8, C.FORMAT_NVFP4):
         raise PolicyError(f"unknown output format {output_format!r}")
+    if source_form not in (C.SOURCE_FORM_FULL, C.SOURCE_FORM_PREPRUNED):
+        raise PolicyError(f"unknown source form {source_form!r}")
 
-    plan = OutputPlan(output_format=output_format, geometry=geometry)
+    plan = OutputPlan(output_format=output_format, geometry=geometry, source_form=source_form)
+    prepruned = source_form == C.SOURCE_FORM_PREPRUNED
 
     quant_layers = set(quantized_layer_names(geometry))
-    adaln_map = {p: idx for idx, p in enumerate(adaln_prefixes(geometry))}
+    # Nothing is collapsed on the pre-pruned path, so there are no AdaLN
+    # targets and every adaln tensor falls through to the passthrough branch.
+    adaln_map = {} if prepruned else {p: idx for idx, p in enumerate(adaln_prefixes(geometry))}
     storage_fn = w4a8_storage if output_format == C.FORMAT_W4A8 else nvfp4_storage
 
     emitted: set[str] = set()
@@ -191,8 +208,10 @@ def build_output_plan(header: Header, geometry: H3Geometry, output_format: str) 
         plan.tensors.append(PlannedTensor(name, dtype, shape))
 
     # The curve table replaces the time embedder; emit it first so the table is
-    # at a stable, easily inspected position in the file.
-    emit(C.ADALN_TABLE_KEY, "F32", (C.ADALN_CURVE_GRID, C.ADALN_CURVE_RANK))
+    # at a stable, easily inspected position in the file. A pre-pruned source
+    # already has one, which the loop below copies through where it stands.
+    if not prepruned:
+        emit(C.ADALN_TABLE_KEY, "F32", (C.ADALN_CURVE_GRID, C.ADALN_CURVE_RANK))
 
     for key, info in header.tensors.items():
         # 1. The full time embedder disappears entirely - its behaviour is
@@ -252,11 +271,13 @@ def build_output_plan(header: Header, geometry: H3Geometry, output_format: str) 
         plan.passthrough_keys.append(key)
         emit(key, info.dtype, info.shape)
 
-    _verify_plan(plan, header, geometry)
+    _verify_plan(plan, header, geometry, source_form)
     return plan
 
 
-def _verify_plan(plan: OutputPlan, header: Header, geometry: H3Geometry) -> None:
+def _verify_plan(plan: OutputPlan, header: Header, geometry: H3Geometry,
+                 source_form: str) -> None:
+    prepruned = source_form == C.SOURCE_FORM_PREPRUNED
     expected_quant = len(quantized_layer_names(geometry))
     if len(plan.quant_targets) != expected_quant:
         found = {t.layer for t in plan.quant_targets}
@@ -267,12 +288,44 @@ def _verify_plan(plan: OutputPlan, header: Header, geometry: H3Geometry) -> None
             + (f"; first missing: {missing[0]}" if missing else "")
         )
 
-    expected_adaln = geometry.num_layers + 1
+    expected_adaln = 0 if prepruned else geometry.num_layers + 1
     if len(plan.adaln_targets) != expected_adaln:
         raise PolicyError(
-            f"found {len(plan.adaln_targets)} AdaLN projections, expected {expected_adaln} "
-            f"({geometry.num_layers} blocks + final layer)"
+            f"found {len(plan.adaln_targets)} AdaLN projections to collapse, expected "
+            f"{expected_adaln} for a {source_form} source"
         )
+
+    if prepruned:
+        # Every curve tensor must be present in the output, unchanged. The
+        # table is checked here because it is the one tensor the full path
+        # synthesises -- if it ever ended up regenerated on this path, the
+        # promise that the source curve is preserved would be silently broken.
+        table = header.get(C.ADALN_TABLE_KEY)
+        planned_table = next((t for t in plan.tensors if t.name == C.ADALN_TABLE_KEY), None)
+        if table is None or planned_table is None:
+            raise PolicyError(f"{C.ADALN_TABLE_KEY} is missing from a pre-pruned conversion")
+        if planned_table.dtype != table.dtype or planned_table.shape != table.shape:
+            raise PolicyError(
+                f"{C.ADALN_TABLE_KEY} must be copied unchanged: source is {table.dtype} "
+                f"{table.shape}, plan has {planned_table.dtype} {planned_table.shape}"
+            )
+        if C.ADALN_TABLE_KEY not in plan.passthrough_keys:
+            raise PolicyError(f"{C.ADALN_TABLE_KEY} must be copied, not rebuilt")
+
+        by_name = {t.name: t for t in plan.tensors}
+        for prefix in adaln_prefixes(geometry):
+            for key in (f"{prefix}.weight", f"{prefix}.bias"):
+                source = header.get(key)
+                if source is None:
+                    continue
+                planned = by_name.get(key)
+                if planned is None:
+                    raise PolicyError(f"{key} is missing from the output plan")
+                if planned.dtype != source.dtype or planned.shape != source.shape:
+                    raise PolicyError(
+                        f"{key} must be copied unchanged: source is {source.dtype} "
+                        f"{source.shape}, plan has {planned.dtype} {planned.shape}"
+                    )
 
     # Nothing in a preserved family may have been routed to the quantizer.
     for target in plan.quant_targets:
@@ -280,7 +333,13 @@ def _verify_plan(plan: OutputPlan, header: Header, geometry: H3Geometry) -> None
             if marker in target.layer:
                 raise PolicyError(f"{target.layer} is in a preserved family but was selected for quantization")
 
-    if not plan.dropped_keys:
+    if prepruned:
+        if plan.dropped_keys:
+            raise PolicyError(
+                f"a pre-pruned source has no time embedder to drop, but the plan drops "
+                f"{len(plan.dropped_keys)} tensors"
+            )
+    elif not plan.dropped_keys:
         raise PolicyError("no time_embedder tensors were dropped - source is not in the expected full form")
 
     # Precision islands must survive at their source dtype.

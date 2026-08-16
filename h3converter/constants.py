@@ -31,6 +31,21 @@ NVFP4_POLICY_VERSION = "h3_nvfp4_policy_v1"
 ADALN_PRUNE_VERSION = "h3_adaln_curve_v1"
 
 # --------------------------------------------------------------------------
+# Source form identifiers
+# --------------------------------------------------------------------------
+# A checkpoint arrives in one of two states. They differ only in the timestep
+# path: the full form carries a complete ``time_embedder`` that the converter
+# bakes into ``adaln_t_table``, while the pre-pruned form already carries the
+# table and the reduced projections, which are then copied through untouched.
+SOURCE_FORM_FULL = "full_h3_bf16"
+SOURCE_FORM_PREPRUNED = "prepruned_h3_float"
+
+SOURCE_FORM_LABELS = {
+    SOURCE_FORM_FULL: "Full, unpruned floating-point H3",
+    SOURCE_FORM_PREPRUNED: "Already AdaLN-pruned floating-point H3",
+}
+
+# --------------------------------------------------------------------------
 # Output format identifiers (user-facing labels and internal keys)
 # --------------------------------------------------------------------------
 FORMAT_W4A8 = "w4a8_convrot"
@@ -295,3 +310,27 @@ PHASE_WEIGHTS = {
         "finalize": 0.05,
     },
 }
+
+# A pre-pruned source skips both AdaLN phases entirely -- there is no basis to
+# fit and nothing to collapse. Their 0.30 of weight is redistributed onto the
+# quantize phase, which is now the whole of the work; leaving PHASE_WEIGHTS
+# unchanged would strand the progress bar at 70%.
+PHASE_WEIGHTS_PREPRUNED = {
+    FORMAT_W4A8: {
+        "inspect": 0.05,
+        "quantize": 0.90,
+        "finalize": 0.05,
+    },
+    FORMAT_NVFP4: {
+        "inspect": 0.05,
+        "calibrate": 0.10,
+        "quantize": 0.80,
+        "finalize": 0.05,
+    },
+}
+
+
+def phase_weights(output_format: str, source_form: str = SOURCE_FORM_FULL) -> dict[str, float]:
+    """Phase weighting for one (format, source form) pair."""
+    table = PHASE_WEIGHTS_PREPRUNED if source_form == SOURCE_FORM_PREPRUNED else PHASE_WEIGHTS
+    return dict(table[output_format])

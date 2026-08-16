@@ -144,7 +144,10 @@ def analyze_source(source: Path, formats: tuple[str, ...] = (C.FORMAT_W4A8, C.FO
 
     for output_format in formats:
         try:
-            plan = build_output_plan(header, analysis.detection.geometry, output_format)
+            plan = build_output_plan(
+                header, analysis.detection.geometry, output_format,
+                analysis.detection.source_form,
+            )
         except Exception as exc:  # noqa: BLE001
             analysis.errors.append(f"{C.FORMAT_LABELS[output_format]}: {exc}")
             continue
@@ -207,6 +210,11 @@ def convert(
                 "This H3 checkpoint cannot be converted: " + "; ".join(detection.errors)
             )
         geometry = detection.geometry
+        source_form = detection.source_form
+        prepruned = source_form == C.SOURCE_FORM_PREPRUNED
+        # A pre-pruned source skips both AdaLN phases, so the weighting has to
+        # be swapped before any phase past "inspect" starts or the bar strands.
+        tracker.weights = C.phase_weights(request.output_format, source_form)
         log.info("Detected %s", detection.summary)
         for warning in detection.warnings:
             log.warning("source: %s", warning)
@@ -214,6 +222,8 @@ def convert(
 
         report.architecture = {
             "model": "minimax_h3",
+            "source_form": source_form,
+            "source_form_label": detection.source_form_label,
             "detected": geometry.as_dict(),
             "reference": {k: v for k, v in C.H3_REFERENCE_GEOMETRY.items() if k != "patch_size"},
             "source_float_dtype": detection.float_dtype,
@@ -222,7 +232,7 @@ def convert(
         tracker.advance(1, "Planning output")
 
         # ---- 2. plan ----------------------------------------------------
-        plan = build_output_plan(header, geometry, request.output_format)
+        plan = build_output_plan(header, geometry, request.output_format, source_form)
         log.info(
             "Output plan: %d tensors, %d quantized layers, %.2f GB of tensor data",
             len(plan.tensors), plan.quantized_layer_count, plan.total_bytes / 1000**3,
@@ -300,35 +310,50 @@ def convert(
         # ---- 5. AdaLN basis ---------------------------------------------
         log.info("Opening source for reading (%s)", "mmap" if request.mmap_source else "direct reads")
         reader = SourceReader(source, mmap=request.mmap_source, header=header)
-        tracker.start_phase("adaln_basis", 2, "Sampling the timestep curve")
 
-        log.info("Reading time embedder: %s", ", ".join(sorted(plan.dropped_keys)))
-        embedder = TimeEmbedder.from_tensors(
-            {key: reader.get(key) for key in plan.dropped_keys}
-        )
-        log.info(
-            "Time embedder: freq_dim %d -> hidden %d -> %d",
-            embedder.freq_dim, embedder.proj_in_weight.shape[0], embedder.out_dim,
-        )
-        tracker.advance(1, f"Fitting rank-{C.ADALN_CURVE_RANK} basis over {C.ADALN_CURVE_GRID} points")
+        basis: CurveBasis | None = None
+        prune_report: PruneReport | None = None
 
-        log.info(
-            "Fitting rank-%d basis over %d sampled timesteps",
-            C.ADALN_CURVE_RANK, C.ADALN_CURVE_GRID,
-        )
-        basis = build_curve_basis(
-            embedder,
-            grid=C.ADALN_CURVE_GRID,
-            rank=C.ADALN_CURVE_RANK,
-            center=request.center_basis,
-        )
-        prune_report = PruneReport(basis_stats=basis.stats())
-        prune_report.curve_rel_l2 = curve_reconstruction_error(basis, embedder)
-        log.info(
-            "Curve basis: %.4e relative error on the interpolated curve, %.6f energy retained",
-            prune_report.curve_rel_l2, basis.stats()["energy_retained"],
-        )
-        tracker.advance(1, f"Curve error {prune_report.curve_rel_l2:.2e}")
+        if prepruned:
+            # Nothing to fit and nothing to collapse. The table and the reduced
+            # projections are already in plan.passthrough_keys and get copied
+            # byte-for-byte with everything else in the quantize phase.
+            table_info = header.tensors[C.ADALN_TABLE_KEY]
+            log.info(
+                "Source is already in curve form: %s %s copied unchanged, "
+                "%d AdaLN projections preserved",
+                table_info.dtype, table_info.shape, geometry.num_layers + 1,
+            )
+        else:
+            tracker.start_phase("adaln_basis", 2, "Sampling the timestep curve")
+
+            log.info("Reading time embedder: %s", ", ".join(sorted(plan.dropped_keys)))
+            embedder = TimeEmbedder.from_tensors(
+                {key: reader.get(key) for key in plan.dropped_keys}
+            )
+            log.info(
+                "Time embedder: freq_dim %d -> hidden %d -> %d",
+                embedder.freq_dim, embedder.proj_in_weight.shape[0], embedder.out_dim,
+            )
+            tracker.advance(1, f"Fitting rank-{C.ADALN_CURVE_RANK} basis over {C.ADALN_CURVE_GRID} points")
+
+            log.info(
+                "Fitting rank-%d basis over %d sampled timesteps",
+                C.ADALN_CURVE_RANK, C.ADALN_CURVE_GRID,
+            )
+            basis = build_curve_basis(
+                embedder,
+                grid=C.ADALN_CURVE_GRID,
+                rank=C.ADALN_CURVE_RANK,
+                center=request.center_basis,
+            )
+            prune_report = PruneReport(basis_stats=basis.stats())
+            prune_report.curve_rel_l2 = curve_reconstruction_error(basis, embedder)
+            log.info(
+                "Curve basis: %.4e relative error on the interpolated curve, %.6f energy retained",
+                prune_report.curve_rel_l2, basis.stats()["energy_retained"],
+            )
+            tracker.advance(1, f"Curve error {prune_report.curve_rel_l2:.2e}")
         usage.sample()
         check_cancel()
 
@@ -341,7 +366,8 @@ def convert(
             plan=plan,
             layer_configs=layer_configs,
             extra={
-                "adaln_basis_centered": str(basis.centered).lower(),
+                "adaln_basis_centered": str(basis.centered).lower() if basis else "not_applicable",
+                "adaln_source": "preserved" if prepruned else "rebuilt",
                 "calibration": calibration_plan.strategy if calibration_plan else "not_applicable",
             },
         )
@@ -349,43 +375,62 @@ def convert(
         writer.open()
         log.info("Writing %s (%.2f GB planned)", partial.name, writer.data_bytes / 1000**3)
 
-        writer.write(C.ADALN_TABLE_KEY, table_for_storage(basis))
+        # ---- 7. AdaLN curve form ----------------------------------------
+        if prepruned:
+            table_info = header.tensors[C.ADALN_TABLE_KEY]
+            report.pruning = {
+                "mode": "preserved_from_source",
+                "description": (
+                    "source was already in the compact AdaLN curve form; the table and all "
+                    "reduced projections were copied unchanged"
+                ),
+                "adaln_table": {
+                    "key": C.ADALN_TABLE_KEY,
+                    "dtype": table_info.dtype,
+                    "shape": list(table_info.shape),
+                },
+                "projections_preserved": geometry.num_layers + 1,
+                "curve_rel_l2": None,
+                "projections": [],
+                "warnings": [],
+            }
+        else:
+            writer.write(C.ADALN_TABLE_KEY, table_for_storage(basis))
 
-        # ---- 7. collapse AdaLN projections ------------------------------
-        probes = probe_timesteps(basis.grid)
-        tracker.start_phase("adaln_collapse", len(plan.adaln_targets), "Collapsing AdaLN projections")
-        for index, target in enumerate(plan.adaln_targets):
-            check_cancel()
-            weight = reader.get(target.weight_key)
-            bias = reader.get(target.bias_key) if target.bias_key else None
+            probes = probe_timesteps(basis.grid)
+            tracker.start_phase("adaln_collapse", len(plan.adaln_targets), "Collapsing AdaLN projections")
+            for index, target in enumerate(plan.adaln_targets):
+                check_cancel()
+                weight = reader.get(target.weight_key)
+                bias = reader.get(target.bias_key) if target.bias_key else None
 
-            reduced = collapse_projection(basis, weight, bias, weight_dtype=torch.bfloat16)
-            prune_report.projections.append(
-                validate_projection(
-                    target.prefix, basis, embedder, weight, bias, reduced, t=probes
+                reduced = collapse_projection(basis, weight, bias, weight_dtype=torch.bfloat16)
+                prune_report.projections.append(
+                    validate_projection(
+                        target.prefix, basis, embedder, weight, bias, reduced, t=probes
+                    )
                 )
-            )
 
-            writer.write(target.weight_key, reduced.weight)
-            if target.bias_key is not None and reduced.bias is not None:
-                writer.write(target.bias_key, reduced.bias)
+                writer.write(target.weight_key, reduced.weight)
+                if target.bias_key is not None and reduced.bias is not None:
+                    writer.write(target.bias_key, reduced.bias)
 
-            del weight, bias, reduced
-            usage.sample()
-            tracker.advance(1, f"{target.prefix} ({index + 1}/{len(plan.adaln_targets)})")
+                del weight, bias, reduced
+                usage.sample()
+                tracker.advance(1, f"{target.prefix} ({index + 1}/{len(plan.adaln_targets)})")
 
-        # Numerical gate: refuse to go further if the curve form is not faithful.
-        worst = prune_report.worst
-        if worst is not None:
-            log.info("Worst AdaLN reconstruction: %s at %.4e relative L2", worst.layer, worst.rel_l2)
-            if worst.rel_l2 > C.ADALN_REL_ERROR_WARN:
-                prune_report.warnings.append(
-                    f"AdaLN reconstruction error {worst.rel_l2:.3%} on {worst.layer} is above the "
-                    f"{C.ADALN_REL_ERROR_WARN:.2%} advisory threshold"
-                )
-        check_report(prune_report)
-        report.pruning = prune_report.as_dict()
-        report.warnings.extend(prune_report.warnings)
+            # Numerical gate: refuse to go further if the curve form is not faithful.
+            worst = prune_report.worst
+            if worst is not None:
+                log.info("Worst AdaLN reconstruction: %s at %.4e relative L2", worst.layer, worst.rel_l2)
+                if worst.rel_l2 > C.ADALN_REL_ERROR_WARN:
+                    prune_report.warnings.append(
+                        f"AdaLN reconstruction error {worst.rel_l2:.3%} on {worst.layer} is above the "
+                        f"{C.ADALN_REL_ERROR_WARN:.2%} advisory threshold"
+                    )
+            check_report(prune_report)
+            report.pruning = prune_report.as_dict()
+            report.warnings.extend(prune_report.warnings)
         gc.collect()
         check_cancel()
 

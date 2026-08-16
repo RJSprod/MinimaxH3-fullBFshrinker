@@ -365,8 +365,14 @@ class MainWindow(QMainWindow):
                 facts.set("Dimensions", f"hidden {geometry.hidden_size}, "
                                         f"{geometry.num_attention_heads}x{geometry.attention_head_dim} heads, "
                                         f"ffn {geometry.ffn_hidden_size}, time embed {geometry.time_embed_dim}")
-            facts.set("Pruning state", "curve-pruned already" if detection.already_curve_pruned
-                      else "full time embedder (convertible)")
+            facts.set("Source form", detection.source_form_label)
+            if detection.already_curve_pruned and geometry:
+                facts.set("AdaLN table", f"F32 [{C.ADALN_CURVE_GRID}, {C.ADALN_CURVE_RANK}]")
+            facts.set(
+                "Additional pruning required",
+                "Yes - the AdaLN curve form will be built" if detection.needs_pruning
+                else "No - the existing curve form is copied unchanged",
+            )
             facts.set("Quantization state", "already quantized" if detection.already_quantized else "none")
             facts.set(
                 "Compatibility",

@@ -46,7 +46,8 @@ def _print_analysis(analysis) -> None:
               f"ffn {geometry.ffn_hidden_size}, time embed {geometry.time_embed_dim}")
         print(f"          token refiner {geometry.token_refiner_num_layers} blocks, "
               f"text dim {geometry.text_dim}")
-    print(f"Pruned:    {'yes' if detection.already_curve_pruned else 'no'}")
+    print(f"Form:      {detection.source_form_label}")
+    print(f"Pruning:   {'required' if detection.needs_pruning else 'not required (curve form preserved)'}")
     print(f"Quantized: {'yes' if detection.already_quantized else 'no'}")
 
     for warning in detection.warnings:
@@ -91,7 +92,8 @@ def _progress_printer():
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="h3convert",
-        description=f"{C.APP_NAME} {C.APP_VERSION} - convert a full BF16 MiniMax H3 checkpoint",
+        description=f"{C.APP_NAME} {C.APP_VERSION} - convert a full BF16 or "
+                    "already AdaLN-pruned MiniMax H3 checkpoint",
     )
     parser.add_argument("source", nargs="?", type=Path, help="source .safetensors checkpoint")
     parser.add_argument(

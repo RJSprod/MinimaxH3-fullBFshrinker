@@ -1,15 +1,22 @@
 # MiniMax H3 Checkpoint Converter
 
-Converts a full, unpruned **MiniMax H3 BF16** diffusion checkpoint (~66 GB) into one of two
-ComfyUI-compatible ~12.5 GB checkpoints:
+Converts a **MiniMax H3** diffusion checkpoint into one of two ComfyUI-compatible ~12.5 GB
+checkpoints:
 
 | | Output | Format |
 |---|---|---|
 | **A** | AdaLN-pruned W4A8 ConvRot | `asym_w4a8_int8`, W4 group 16, ConvRot group 256 |
 | **B** | AdaLN-pruned NVFP4 | `nvfp4`, group 16 |
 
+Two source forms are accepted, detected from the checkpoint's own tensor structure:
+
+| Source form | Looks like | What happens to the timestep path |
+|---|---|---|
+| **Full** | ~66 GB, carries a complete `time_embedder` | the AdaLN curve form is built and validated |
+| **Pre-pruned** | ~40 GB, already carries `adaln_t_table` (e.g. TenStrip/10Eros-Max) | the existing curve form is copied through **bit-for-bit** — never rebuilt, re-fitted or re-collapsed |
+
 The user picks a file and picks A or B. Everything else — environment bootstrap, architecture
-detection, AdaLN curve construction, layer policy, quantization, validation — is automatic.
+detection, AdaLN handling, layer policy, quantization, validation — is automatic.
 
 ```
 start_windows.bat  →  Browse…  →  pick .safetensors  →  [A] or [B]  →  wait  →  done
@@ -47,8 +54,10 @@ uv run h3convert model_bf16.safetensors --format b    # NVFP4
 
 The filename is never trusted. A 66 GB file is identified from its safetensors header alone —
 tensor names, shapes and dtypes — using the same signature ComfyUI's own detector keys on
-(`video_patch_proj` + `audio_patch_proj`). The converter refuses a source that is already
-curve-pruned, already quantized, or structurally not H3, and it reports the detected geometry
+(`video_patch_proj` + `audio_patch_proj`). Detection also classifies which timestep path the
+checkpoint uses — a full `time_embedder` or an existing `adaln_t_table` — and refuses anything
+carrying both (undecidable), neither (unloadable), already quantized, or structurally not H3.
+It reports the detected geometry
 against the reference:
 
 ```

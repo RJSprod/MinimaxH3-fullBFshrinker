@@ -15,7 +15,7 @@ import torch
 from safetensors.torch import save_file
 
 from h3converter.h3_detect import H3Geometry
-from h3converter.h3_reference import full_source_inventory
+from h3converter.h3_reference import full_source_inventory, prepruned_source_inventory
 from h3converter.safetensor_io import ST_TO_TORCH
 
 # A miniature H3: narrow, but with a real block count.
@@ -78,4 +78,34 @@ def build_synthetic_h3(
 
     path.parent.mkdir(parents=True, exist_ok=True)
     save_file(tensors, str(path), metadata=metadata or {"model": "synthetic-minimax-h3"})
+    return path
+
+
+def build_prepruned_h3(
+    path: Path,
+    geometry: H3Geometry = SMALL_GEOMETRY,
+    seed: int = 20260816,
+    float_dtype: str = "BF16",
+    adaln_dtype: str | None = None,
+    metadata: dict[str, str] | None = None,
+) -> Path:
+    """Write a synthetic H3 that is *already* in the AdaLN curve form.
+
+    This is the shape a TenStrip/10Eros-Max checkpoint arrives in: no time
+    embedder, an ``adaln_t_table`` at the full 1025x8, and every AdaLN
+    projection already reduced to rank 8.
+
+    ``adaln_dtype`` is separable from ``float_dtype`` so the suite can cover an
+    F32-curve source, which the converter must copy through and then accept in
+    its own output validation.
+    """
+    generator = torch.Generator().manual_seed(seed)
+    tensors: dict[str, torch.Tensor] = {}
+    for spec in prepruned_source_inventory(
+        geometry, float_dtype=float_dtype, adaln_dtype=adaln_dtype
+    ):
+        tensors[spec.name] = _fill(spec.name, ST_TO_TORCH[spec.dtype], spec.shape, generator)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save_file(tensors, str(path), metadata=metadata or {"model": "synthetic-minimax-h3-pruned"})
     return path
