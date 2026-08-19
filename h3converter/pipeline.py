@@ -34,6 +34,7 @@ from h3converter.adaln_prune import (
     validate_projection,
 )
 from h3converter.h3_detect import Detection, detect
+from h3converter.model_detect import ModelFamily, detect as detect_model
 from h3converter.h3_policy import OutputPlan, build_output_plan
 from h3converter.hardware import DiskCheck, PeakUsage, check_disk, system_info
 from h3converter.logging_setup import active_log_path, get_logger
@@ -138,8 +139,20 @@ def analyze_source(source: Path, formats: tuple[str, ...] = (C.FORMAT_W4A8, C.FO
         return analysis
 
     analysis.size_bytes = header.file_size
-    analysis.detection = detect(header)
+    analysis.detection = detect_model(header)
     if not analysis.detection.convertible or analysis.detection.geometry is None:
+        return analysis
+
+    if analysis.detection.family is ModelFamily.KREA2:
+        from h3converter.krea2_policy import build_output_plan as build_krea_plan
+        formats = (C.FORMAT_KREA2_FP8,)
+        try:
+            plan = build_krea_plan(header, analysis.detection.detail.prefix)
+            analysis.plan_preview[C.FORMAT_KREA2_FP8] = plan
+            target = derive_output_path(source, C.FORMAT_KREA2_FP8)
+            analysis.disk[C.FORMAT_KREA2_FP8] = check_disk(target, C.FORMAT_KREA2_FP8, plan.total_bytes)
+        except Exception as exc:  # noqa: BLE001
+            analysis.errors.append(f"{C.FORMAT_LABELS[C.FORMAT_KREA2_FP8]}: {exc}")
         return analysis
 
     for output_format in formats:
@@ -168,6 +181,9 @@ def convert(
     should_cancel: CancelCheck | None = None,
 ) -> ConversionOutcome:
     """Run one full conversion. Never raises for expected failures."""
+    if request.output_format == C.FORMAT_KREA2_FP8:
+        from h3converter.krea2_pipeline import convert as convert_krea2
+        return convert_krea2(request, progress_callback, should_cancel)
     outcome = ConversionOutcome()
     report = outcome.report
     tracker = ProgressTracker.for_format(request.output_format, progress_callback)

@@ -1,0 +1,16 @@
+{
+  "policy_version": "krea2_fp8_policy_v3",
+  "quantized_layer_families": [
+    "blocks.*.attn.wq.weight", "blocks.*.attn.wk.weight",
+    "blocks.*.attn.wv.weight", "blocks.*.attn.wo.weight",
+    "blocks.*.<mapped-mlp-input>.weight shape [16384,6144] (two per block)",
+    "blocks.*.<mapped-mlp-output>.weight shape [6144,16384] (one per block)"
+  ],
+  "expected_per_block": {"attention": 4, "mlp": 3, "blocks": 28, "total": 196},
+  "generated_side_tensors": [{"suffix": ".weight_scale", "dtype": "F32", "shape": []}],
+  "preserved_families": ["first.*", "last.*", "*.bias", "*.scale", "txtfusion.*"],
+  "weight_dtype": "F8_E4M3",
+  "metadata_key": null,
+  "runtime_quant_format": null,
+  "loader_contract": "Forge legacy fp8_scaled: infer from F8_E4M3 weight plus sibling F32 weight_scale; do not route through QUANT_ALGOS"
+}
